@@ -1,0 +1,8 @@
+name: CI
+on:
+  workflow_dispatch:
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "placeholder - replaced by the real pipeline later in this branch"
