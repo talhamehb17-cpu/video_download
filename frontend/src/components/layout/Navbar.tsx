@@ -74,6 +74,8 @@ export function Navbar({ theme, onToggleTheme, activeSection }: NavbarProps) {
 
   return (
     <header className="fixed inset-x-0 top-0 z-50">
+      {/* softens whatever scrolls through the gap above the floating bar */}
+      <div aria-hidden className={cn('nav-veil', (scrolled || open) && 'opacity-100')} />
       <div className="mx-auto max-w-6xl px-4 pt-3 sm:px-6">
         <nav
           aria-label="Main"

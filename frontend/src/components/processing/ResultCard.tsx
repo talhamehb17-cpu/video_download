@@ -122,7 +122,7 @@ export function ResultCard({
         </div>
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1.25fr_1fr]">
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <QualitySelector qualities={analysis.qualities} selectedId={selected?.id ?? null} onSelect={onSelectQuality} disabled={starting} />
         <SubtitlePanel
           analysisId={analysis.id}

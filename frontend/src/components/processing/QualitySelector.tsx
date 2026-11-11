@@ -39,7 +39,7 @@ export function QualitySelector({ qualities, selectedId, onSelect, disabled = fa
           {qualities.length} option{qualities.length === 1 ? '' : 's'} from the source
         </span>
       </legend>
-      <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(7.25rem,1fr))] gap-2.5">
+      <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(8.75rem,45%),1fr))] gap-2.5">
         {qualities.map((quality) => {
           const selected = quality.id === selectedId
           const blocked = quality.exceeds_limit

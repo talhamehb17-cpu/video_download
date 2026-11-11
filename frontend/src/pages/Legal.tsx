@@ -177,6 +177,13 @@ export function Terms() {
 
 export function NotFound() {
   usePageEntry()
+  useEffect(() => {
+    const previous = document.title
+    document.title = `Page not found — ${BRAND}`
+    return () => {
+      document.title = previous
+    }
+  }, [])
   return (
     <main id="main" className="mx-auto grid min-h-[70dvh] max-w-xl place-items-center px-4 pt-32 text-center sm:px-6">
       <div>

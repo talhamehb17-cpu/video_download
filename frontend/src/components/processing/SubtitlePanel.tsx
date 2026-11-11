@@ -83,21 +83,28 @@ export function SubtitlePanel({ analysisId, tracks, canEmbed, embedIds, onToggle
             </label>
           )}
 
-          <ul className="thin-scrollbar mt-3 max-h-[19rem] divide-y divide-line overflow-y-auto rounded-2xl border border-line bg-glass">
+          <ul className="thin-scrollbar mt-3 max-h-[21rem] divide-y divide-line overflow-y-auto rounded-2xl border border-line bg-glass">
             {visible.map(({ track, name }) => {
               const embedded = embedIds.includes(track.id)
               const error = errors[track.id]
               return (
-                <li key={track.id} className="px-3.5 py-3">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                    <div className="min-w-0 flex-1 basis-40">
-                      <p className="truncate text-sm font-medium text-ink">{name}</p>
-                      <p className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-mute">
-                        <span className="font-mono">{track.language}</span>
-                        {track.kind === 'auto' && (
-                          <span className="rounded bg-warn/12 px-1.5 py-px text-[10.5px] font-medium text-warn">Auto-generated</span>
+                <li key={track.id} className="px-3.5 py-2.5">
+                  {/* one line where there is room; otherwise the name, then the actions */}
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                    <div className="min-w-0 flex-1 basis-24">
+                      {/* long names wrap rather than lose their ending: "Spanish" and "Latin American Spanish" differ there */}
+                      <p className="text-sm font-medium leading-snug text-ink [overflow-wrap:anywhere]">
+                        {name}
+                        {/* the code is only worth showing when it is not already the name */}
+                        {name !== track.language && (
+                          <span className="ml-2 whitespace-nowrap font-mono text-xs font-normal text-ink-mute">{track.language}</span>
                         )}
                       </p>
+                      {track.kind === 'auto' && (
+                        <p className="mt-1">
+                          <span className="rounded bg-warn/12 px-1.5 py-px text-[10.5px] font-medium text-warn">Auto-generated</span>
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1.5">
@@ -128,30 +135,30 @@ export function SubtitlePanel({ analysisId, tracks, canEmbed, embedIds, onToggle
                           </button>
                         )
                       })}
-                    </div>
 
-                    {track.embeddable && (
-                      <label
-                        className={cn(
-                          'inline-flex min-h-9 items-center gap-2 text-xs sm:min-h-8',
-                          canEmbed && !disabled ? 'cursor-pointer text-ink-soft' : 'cursor-not-allowed text-ink-mute opacity-60',
-                        )}
-                        title={canEmbed ? 'Add this track inside the video file' : 'The selected format cannot hold subtitles'}
-                      >
-                        <input
-                          type="checkbox"
-                          className="peer sr-only"
-                          checked={embedded && canEmbed}
-                          disabled={!canEmbed || disabled}
-                          onChange={() => onToggleEmbed(track.id)}
-                        />
-                        <span
-                          aria-hidden
-                          className="relative h-5 w-9 shrink-0 rounded-full border border-line-strong bg-glass transition-colors peer-checked:border-transparent peer-checked:bg-brand peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-cyan after:absolute after:left-0.5 after:top-1/2 after:size-3.5 after:-translate-y-1/2 after:rounded-full after:bg-ink-soft after:transition-transform peer-checked:after:translate-x-4 peer-checked:after:bg-white"
-                        />
-                        Embed
-                      </label>
-                    )}
+                      {track.embeddable && (
+                        <label
+                          className={cn(
+                            'ml-1 inline-flex min-h-9 items-center gap-2 text-xs sm:min-h-8',
+                            canEmbed && !disabled ? 'cursor-pointer text-ink-soft' : 'cursor-not-allowed text-ink-mute opacity-60',
+                          )}
+                          title={canEmbed ? 'Add this track inside the video file' : 'The selected format cannot hold subtitles'}
+                        >
+                          <input
+                            type="checkbox"
+                            className="peer sr-only"
+                            checked={embedded && canEmbed}
+                            disabled={!canEmbed || disabled}
+                            onChange={() => onToggleEmbed(track.id)}
+                          />
+                          <span
+                            aria-hidden
+                            className="relative h-5 w-9 shrink-0 rounded-full border border-line-strong bg-glass transition-colors peer-checked:border-transparent peer-checked:bg-brand peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-cyan after:absolute after:left-0.5 after:top-1/2 after:size-3.5 after:-translate-y-1/2 after:rounded-full after:bg-ink-soft after:transition-transform peer-checked:after:translate-x-4 peer-checked:after:bg-white"
+                          />
+                          Embed
+                        </label>
+                      )}
+                    </div>
                   </div>
                   {error && (
                     <p role="alert" className="mt-2 text-xs text-bad">

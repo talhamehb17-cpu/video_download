@@ -242,6 +242,23 @@
   }
 }
 
+/* A strip behind the floating navigation bar: blurs and dims the page as it
+   scrolls through the gap above the bar, and fades out to nothing below it. */
+@utility nav-veil {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: -1;
+  height: 4.25rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  background: linear-gradient(to bottom, color-mix(in oklab, var(--bg) 78%, transparent), transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+}
+
 @utility thin-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
