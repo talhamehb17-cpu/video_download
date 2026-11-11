@@ -45,6 +45,14 @@ The website is live at **<https://lumora-video.vercel.app>**. It needs an API to
 
 ![An analyzed video with quality and subtitle choices](docs/result.jpg)
 
+<p align="center">
+  <img src="docs/mobile-light.jpg" alt="The Lumora home page on a phone, in the light theme" width="300">
+</p>
+
+<sub>Screenshots of the real application running locally. The analyzed clip comes from the sample source in
+<a href="backend/scripts/sample_source.py"><code>backend/scripts/sample_source.py</code></a>, which is why its
+source reads 127.0.0.1.</sub>
+
 ## Source policy
 
 Out of the box Lumora only accepts links from an **allow list of sources that publish their videos for download
@@ -127,14 +135,24 @@ The API cannot run as serverless functions: it needs FFmpeg, a writable disk, an
 minutes. Use a host that runs a container. [`backend/Dockerfile`](backend/Dockerfile) builds the image and
 [`render.yaml`](render.yaml) describes it for [Render](https://render.com):
 
-1. Merge this branch into `main`.
-2. In the Render dashboard choose **New > Blueprint** and select this repository.
-3. Render builds the image and gives the service an address such as `https://lumora-api.onrender.com`.
+1. In the Render dashboard choose **New > Blueprint**, select this repository and the branch that holds the
+   code (normally `main`).
+2. Render builds the image and gives the service an address such as `https://lumora-api.onrender.com`.
    Open `<address>/health`; it should answer `{"status":"ok", ...}`.
 
-The blueprint is sized for Render's free instance (512 MB of memory): one download at a time, files up to
-512 MB, kept for 15 minutes. These numbers are cautious starting points and have not been tried on Render. A free instance sleeps after 15 idle minutes and takes up to a minute to wake;
-the website shows "Waking up the server" and waits. Raise the limits in `render.yaml` on a larger instance.
+The blueprint asks for Render's **free** instance. That is enough to try Lumora out, and not more. This is
+what [Render documents](https://render.com/docs/free) for it:
+
+- 512 MB of memory and a tenth of a CPU core. An analysis costs a little under one CPU-second (measured
+  locally), so expect it to take around ten seconds there.
+- The service is stopped after 15 minutes without requests and takes about a minute to start again. The
+  website says "Waking up the server" meanwhile and waits for up to two minutes.
+- Render may suspend a free service that moves an unusually large amount of data, and a download service
+  moves a lot. For regular use change `plan` in `render.yaml` to `0.5c-512mb` or larger, or pick another host.
+
+The limits in the blueprint (one download at a time, files up to 512 MB, kept for 15 minutes) are cautious
+starting points. **The blueprint has been checked against Render's documentation but not run on Render.**
+Raise the limits on a larger instance.
 
 Any other container host works the same way (Fly.io, Railway, Cloud Run with a single always-on instance, a
 VPS): build `backend/`, expose the port in `$PORT`, and set at least:
@@ -327,7 +345,7 @@ storage. Each lives in one module (`services/jobs.py`, `services/storage.py`). V
 | --- | --- |
 | "Download service not connected yet" | `VITE_API_BASE_URL` was not set when the site was built. Set it and redeploy. |
 | "Download service unreachable" | The API is down or its address is wrong. Open `<api>/health`. If that works, the website's address is missing from `ALLOWED_ORIGINS`. |
-| "Waking up the server…" for a minute | Normal on hosts that sleep when idle. |
+| "Waking up the server…" for a minute | Normal on hosts that sleep when idle. After two minutes the site gives up and offers "Retry". |
 | "This source isn't enabled on this service" | The link's site is not on the allow list. See [Source policy](#source-policy). |
 | "We couldn't reach the source" | The server has no route to that site, or the site is down. |
 | A source that used to work now fails | Update yt-dlp in `backend/requirements.txt` and redeploy. |
