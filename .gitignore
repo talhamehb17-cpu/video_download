@@ -1,0 +1,32 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# Generated sample media and temporary downloads
+.fixtures/
+lumora-media/
+*.part
+
+# Tooling
+.vercel/
+.DS_Store
+.idea/
+.vscode/
+*.log

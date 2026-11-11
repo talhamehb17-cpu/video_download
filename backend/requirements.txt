@@ -1,0 +1,8 @@
+# Runtime dependencies (exact versions that the test suite ran against).
+# yt-dlp follows the sites it supports, so update it regularly; Dependabot is
+# configured for this repository.
+fastapi==0.162.4
+uvicorn[standard]==0.54.0
+pydantic==2.14.3
+pydantic-settings==2.16.2
+yt-dlp[default]==2026.10.26
