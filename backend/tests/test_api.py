@@ -24,6 +24,39 @@ async def test_health_config_and_root(client: httpx.AsyncClient) -> None:
     assert (await client.get("/openapi.json")).status_code == 200
 
 
+async def test_example_links_are_configurable_and_never_point_at_a_refused_source(
+    make_client: Callable[..., Any],
+) -> None:
+    async def offered(**overrides: Any) -> list[dict[str, str]]:
+        client = await make_client(**overrides)
+        examples: list[dict[str, str]] = (await client.get("/api/v1/config")).json()["sources"]["examples"]
+        return examples
+
+    # default: the built-in films, all on the allow list
+    assert {e["label"] for e in await offered()} == {"Big Buck Bunny", "Sintel"}
+    # narrowing the allow list drops the examples that would now be refused
+    assert [e["label"] for e in await offered(allowed_domains=["archive.org"])] == ["Big Buck Bunny"]
+    # an operator's own list: refused, internal and malformed targets are filtered out
+    custom = await offered(
+        unsafe_allow_hosts=["127.0.0.1:8765"],
+        example_links=(
+            "Sample clip | local sample source | http://127.0.0.1:8765/watch/demo;"
+            "Moon landing | NASA | https://images.nasa.gov/details/Apollo_11;"
+            "Elsewhere | Not enabled | https://www.youtube.com/watch?v=abc;"
+            "Internal | Metadata | http://169.254.169.254/latest/;"
+            "Other port | Loopback | http://127.0.0.1:9999/x"
+        ),
+    )
+    assert custom == [
+        {"label": "Sample clip", "source": "local sample source", "url": "http://127.0.0.1:8765/watch/demo"},
+        {"label": "Moon landing", "source": "NASA", "url": "https://images.nasa.gov/details/Apollo_11"},
+    ]
+    # empty means "show none"
+    assert await offered(example_links="") == []
+    # with every public source enabled the built-in films are still offered
+    assert len(await offered(source_policy="open")) == 2
+
+
 @pytest.mark.parametrize(("url", "code"), [
     ("not a url", "invalid_url"),
     ("ftp://example.com/v.mp4", "unsupported_scheme"),

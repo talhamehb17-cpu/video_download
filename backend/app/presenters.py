@@ -6,7 +6,8 @@ import time
 
 from app import __version__, schemas
 from app.errors import AppError
-from app.services.analysis import Analysis
+from app.security.url_validation import SourcePolicy, validate_url_syntax
+from app.services.analysis import Analysis, source_policy
 from app.services.jobs import Job, JobManager, JobStatus
 from app.state import Services
 
@@ -18,7 +19,8 @@ NOTICES = {
     "subtitles_not_embedded": "Some subtitles couldn't be embedded. You can still download them separately.",
 }
 
-# Openly licensed films hosted by sources on the default allow list.
+# Openly licensed films hosted by sources on the default allow list. Operators can
+# replace them with EXAMPLE_LINKS.
 EXAMPLES = (
     schemas.Example(
         label="Big Buck Bunny", source="Internet Archive", url="https://archive.org/details/BigBuckBunny_124"
@@ -28,6 +30,26 @@ EXAMPLES = (
         url="https://commons.wikimedia.org/wiki/File:Sintel_movie_4K.webm",
     ),
 )
+
+
+def _accepted(url: str, policy: SourcePolicy) -> bool:
+    """Would this link pass the checks every pasted link goes through?"""
+    try:
+        validate_url_syntax(url, policy)
+    except AppError:
+        return False
+    return True
+
+
+def examples(services: Services) -> list[schemas.Example]:
+    """Example links to offer. Never one that this server would then refuse."""
+    settings = services.settings
+    configured = settings.example_links
+    candidates = EXAMPLES if configured is None else tuple(
+        schemas.Example(label=label, source=source, url=url) for label, source, url in configured
+    )
+    policy = source_policy(settings)
+    return [example for example in candidates if _accepted(example.url, policy)]
 
 
 def notices(codes: list[str]) -> list[schemas.Notice]:
@@ -113,12 +135,6 @@ def config_response(services: Services) -> schemas.ConfigResponse:
     ffmpeg = services.ffmpeg_path is not None
     allowlist = settings.source_policy == "allowlist"
     domains = sorted(settings.allowed_domains) if allowlist else []
-    examples = [
-        example for example in EXAMPLES
-        if not allowlist or any(
-            example.url.split("/")[2] == d or example.url.split("/")[2].endswith("." + d) for d in domains
-        )
-    ]
     return schemas.ConfigResponse(
         name=settings.app_name,
         version=__version__,
@@ -134,7 +150,7 @@ def config_response(services: Services) -> schemas.ConfigResponse:
             subtitle_embedding=ffmpeg,
             subtitle_formats=["srt", "vtt"],
         ),
-        sources=schemas.SourcePolicyInfo(mode=settings.source_policy, domains=domains, examples=examples),
+        sources=schemas.SourcePolicyInfo(mode=settings.source_policy, domains=domains, examples=examples(services)),
     )
 
 

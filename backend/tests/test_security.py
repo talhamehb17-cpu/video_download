@@ -301,6 +301,7 @@ def test_settings_defaults_and_parsing(tmp_path: object) -> None:
     {"source_policy": "allowlist", "allowed_domains": ""},
     {"rate_limit_analyze": "lots"},
     {"file_ttl_seconds": 5},
+    {"example_links": "A label and a link but no source | https://archive.org/details/x"},
 ])
 def test_settings_reject_unsafe_configuration(overrides: dict[str, str]) -> None:
     with pytest.raises(ValueError):

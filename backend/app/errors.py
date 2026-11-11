@@ -3,6 +3,12 @@
 Every failure the API can report is listed here, so the wording stays consistent
 and nothing internal (stack traces, upstream error text, file paths) leaks to
 clients. The frontend switches on ``code``; ``message`` is safe to show as is.
+
+Status codes carry one promise the frontend relies on: **422 means the request
+itself cannot be fulfilled** (a wrong, private or disallowed link, an oversized
+file), so sending it again would fail the same way and no "Try again" is offered.
+Anything that may succeed later (rate limits, a busy server, a source that timed
+out) uses 409, 410, 429 or 5xx instead.
 """
 
 from __future__ import annotations

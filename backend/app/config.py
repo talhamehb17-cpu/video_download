@@ -18,6 +18,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from app.security.network import parse_host_port_list, parse_ip
 
 CsvList = Annotated[list[str], NoDecode]
+ExampleLink = tuple[str, str, str]  # label, source name, URL
 
 # Sources that publish their media for download and reuse (public-domain or openly
 # licensed) and that work without signing in or circumventing anything. This is the
@@ -114,6 +115,10 @@ class Settings(BaseSettings):
     # Exact host:port pairs exempt from the public-network rule. For automated tests
     # and local demos only; refused when ENVIRONMENT=production.
     unsafe_allow_hosts: CsvList = Field(default_factory=list)
+    # "Try an example" links for the home page: "Label | Source | URL" entries
+    # separated by ";". Unset = two openly licensed films; empty = none. Links the
+    # source policy would refuse are never offered.
+    example_links: Annotated[list[ExampleLink] | None, NoDecode] = None
 
     # --- Tools -------------------------------------------------------------------
     ffmpeg_path: str | None = None
@@ -126,6 +131,21 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("example_links", mode="before")
+    @classmethod
+    def _split_examples(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        entries: list[ExampleLink] = []
+        for item in value.split(";"):
+            if not item.strip():
+                continue
+            parts = [part.strip() for part in item.split("|")]
+            if len(parts) != 3 or not all(parts):
+                raise ValueError("EXAMPLE_LINKS entries must look like 'Label | Source | https://…', separated by ';'")
+            entries.append((parts[0][:60], parts[1][:60], parts[2]))
+        return entries
 
     @field_validator("allowed_ports", mode="before")
     @classmethod
