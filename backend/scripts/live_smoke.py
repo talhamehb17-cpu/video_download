@@ -117,6 +117,13 @@ def report(rows: list[dict[str, Any]]) -> int:
         lines.append(f"| {row['url']} | {result} | {details} |")
     text = "\n".join(lines)
     print(text)
+    if os.environ.get("GITHUB_ACTIONS"):
+        # One annotation per link, so the outcome is visible on the run page itself.
+        for row in rows:
+            details = "; ".join(f"{k}: {v}" for k, v in row.items() if k not in ("url", "ok", "error"))
+            level, title = ("notice", "passed") if row["ok"] else ("error", f"FAILED ({row.get('error')})")
+            message = f"{row['url']} | {details}".replace("%", "%25").replace("\r", " ").replace("\n", " ")
+            print(f"::{level} title=Live smoke test {title}::{message[:1800]}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a", encoding="utf-8") as handle:

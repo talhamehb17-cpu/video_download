@@ -98,8 +98,8 @@ jobs:
           exit 1
       - name: Check the running container
         run: |
-          grep --quiet '"ffmpeg":true' health.json || { echo "FFmpeg is not available in the image" >&2; exit 1; }
-          test "$(docker exec api id -u)" != "0" || { echo "The API runs as root" >&2; exit 1; }
+          grep --quiet '"ffmpeg":true' health.json || { echo "::error title=Container image::FFmpeg is not available in the image"; exit 1; }
+          test "$(docker exec api id -u)" != "0" || { echo "::error title=Container image::the API runs as root"; exit 1; }
           curl --fail --silent http://127.0.0.1:8000/api/v1/config | grep --quiet '"mode":"allowlist"'
           # A link outside the allow list is refused, an internal address is blocked.
           code() { curl --silent --output /dev/null --write-out '%{http_code}' -X POST -H 'Content-Type: application/json' --data "$1" http://127.0.0.1:8000/api/v1/analyze; }
@@ -107,8 +107,16 @@ jobs:
           test "$(code '{"url":"http://169.254.169.254/latest/meta-data/"}')" = "422"
       - name: Stop cleanly
         run: |
-          docker stop --time 25 api
-          test "$(docker inspect --format '{{.State.ExitCode}}' api)" = "0"
+          docker stop -t 25 api
+          code="$(docker inspect --format '{{.State.ExitCode}}' api)"
+          # 0, or 143 when the server passes SIGTERM on after finishing its own shutdown.
+          # 137 would mean it did not stop in time and had to be killed.
+          case "$code" in
+            0|143) echo "::notice title=Container image::built, healthy, FFmpeg present, non-root, stopped cleanly (exit code $code)" ;;
+            *) echo "::error title=Container image::exit code $code after SIGTERM"; exit 1 ;;
+          esac
+          docker logs api 2>&1 | grep --quiet "temporary files deleted" \
+            || { echo "::error title=Container image::the shutdown did not report deleting temporary files"; exit 1; }
       - name: Container logs
         if: always()
         run: docker logs api
