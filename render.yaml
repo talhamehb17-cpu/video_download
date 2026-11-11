@@ -3,16 +3,22 @@
 # In the Render dashboard choose New > Blueprint and pick this repository. Render
 # builds backend/Dockerfile and serves it at https://<service name>.onrender.com.
 # Put that address into the website's VITE_API_BASE_URL (see the README).
+#
+# Checked against Render's documentation, but not yet run on Render.
 services:
   - type: web
     name: lumora-api
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    plan: free          # 512 MB RAM; sleeps after 15 idle minutes (the website waits for it to wake)
-    region: singapore   # or oregon, ohio, virginia, frankfurt
+    # free: 0.1 CPU and 512 MB. Stopped after 15 minutes without requests, about a
+    # minute to start again (the website waits). Render may suspend a free service
+    # that moves a lot of data, so use it to try things out. For regular use:
+    # 0.5c-512mb, 1c-2g, ... (https://render.com/docs/free)
+    plan: free
+    region: singapore   # or oregon, ohio, virginia, frankfurt. Cannot be changed later.
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeployTrigger: commit   # redeploy on every push to the blueprint's branch
     envVars:
       - key: ENVIRONMENT
         value: production

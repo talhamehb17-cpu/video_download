@@ -23,6 +23,9 @@ WORKDIR /srv/app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY app ./app
+# Every analysis and download starts a fresh worker process. Compiled files make
+# that start cheaper, which matters on instances with a fraction of a CPU core.
+RUN python -m compileall -q app
 
 USER lumora
 EXPOSE 8000
