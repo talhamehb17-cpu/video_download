@@ -1,0 +1,33 @@
+# Keeps dependencies current. yt-dlp matters most: it follows the sites it supports,
+# so an old version is the usual reason a source stops working.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      python-tooling:
+        patterns: ["ruff", "mypy", "pytest*", "httpx", "imageio-ffmpeg"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

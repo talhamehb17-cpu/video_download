@@ -1,0 +1,51 @@
+# Render blueprint for the Lumora API (https://render.com/docs/blueprint-spec).
+#
+# In the Render dashboard choose New > Blueprint and pick this repository. Render
+# builds backend/Dockerfile and serves it at https://<service name>.onrender.com.
+# Put that address into the website's VITE_API_BASE_URL (see the README).
+services:
+  - type: web
+    name: lumora-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free          # 512 MB RAM; sleeps after 15 idle minutes (the website waits for it to wake)
+    region: singapore   # or oregon, ohio, virginia, frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+
+      # The website's address(es), comma-separated. Browsers refuse every other origin.
+      - key: ALLOWED_ORIGINS
+        value: https://lumora-video.vercel.app
+
+      # Render sits behind Cloudflare, which puts the visitor's address in this header.
+      # It is what the per-visitor rate limits use.
+      - key: CLIENT_IP_HEADER
+        value: CF-Connecting-IP
+
+      # Which sources are served. See "Source policy" in the README before changing this.
+      - key: SOURCE_POLICY
+        value: allowlist
+      - key: ALLOWED_DOMAINS
+        value: archive.org,wikimedia.org,media.ccc.de,nasa.gov,blender.org
+
+      # Sized for the free instance: the API uses about 55 MB, each download or
+      # analysis worker up to about 150 MB.
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: MAX_CONCURRENT_LIGHT_TASKS
+        value: "2"
+      - key: MAX_QUEUED_JOBS
+        value: "5"
+      - key: MAX_FILE_SIZE_MB
+        value: "512"
+      - key: MIN_FREE_DISK_MB
+        value: "128"
+      - key: FILE_TTL_SECONDS
+        value: "900"
+
+      - key: ENABLE_DOCS
+        value: "false"
