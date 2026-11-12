@@ -175,6 +175,12 @@ docker run --detach --name lumora-api --restart unless-stopped \
   visitor and not to the proxy. Caddy passes the visitor's address on by itself; nginx needs
   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. Use `CLIENT_IP_HEADER` instead only when a
   network such as Cloudflare sets such a header for you. [Configuration](#configuration) has the details.
+- Behind Cloudflare's proxy, set `CLIENT_IP_HEADER=CF-Connecting-IP`, and know that every download then
+  travels through Cloudflare. Its
+  [terms for the Free, Pro and Business plans](https://www.cloudflare.com/service-specific-terms-application-services/#content-delivery-network-terms)
+  require its paid media services for serving video through its network, and let it limit sites that do so
+  without them. Setting the API's DNS record to "DNS only" avoids that; the server then needs its own
+  certificate and `TRUSTED_PROXY_HOPS` instead of `CLIENT_IP_HEADER`.
 
 ### 2. Website
 
