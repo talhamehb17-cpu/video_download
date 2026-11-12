@@ -12,6 +12,8 @@ import httpx
 import pytest
 
 from app.api.admin import router as admin_router
+from app.platforms.registry import CheckResult, Platform
+from app.services.compat import CompatibilityChecker
 from app.services.storage import TempStorage
 
 EMAIL = "owner@example.com"
@@ -43,6 +45,17 @@ async def test_admin_is_off_until_configured(client: httpx.AsyncClient) -> None:
     response = await sign_in(client)
     assert response.status_code == 503 and response.json()["error"]["code"] == "admin_not_configured"
     assert (await client.get("/api/v1/admin/overview", headers=bearer("x" * 43))).status_code == 503
+    status = await client.get("/api/v1/admin/status")
+    assert status.status_code == 200 and status.json() == {"configured": False}
+    assert status.headers["cache-control"] == "no-store"
+
+
+async def test_status_tells_the_page_whether_signing_in_is_possible(make_client: Callable[..., Any]) -> None:
+    client: httpx.AsyncClient = await make_client(**ADMIN)
+    status = await client.get("/api/v1/admin/status")
+    # nothing but that one fact: no address, no version, no account name
+    assert status.status_code == 200 and status.json() == {"configured": True}
+    assert "/api/v1/admin" not in (await client.get("/openapi.json")).text
 
 
 async def test_every_admin_route_needs_a_session(make_client: Callable[..., Any]) -> None:
@@ -51,8 +64,8 @@ async def test_every_admin_route_needs_a_session(make_client: Callable[..., Any]
     for route in admin_router.routes:
         path = route.path.replace("{platform_id}", "youtube")  # type: ignore[attr-defined]
         for method in route.methods - {"HEAD", "OPTIONS"}:  # type: ignore[attr-defined]
-            if path.endswith("/login"):
-                continue
+            if path.endswith(("/login", "/status")):
+                continue  # the two addresses that exist for people who are not signed in
             for headers in ({}, bearer("not-a-real-token"), {"Authorization": "Basic b3duZXI6eA=="},
                             {"Cookie": "token=abc"}):
                 response = await client.request(method, path, headers=headers, json={})
@@ -205,7 +218,11 @@ async def test_internal_and_malformed_targets_cannot_be_added(make_client: Calla
     headers = await ready_admin(client)
     response = await client.post("/api/v1/admin/platforms", headers=headers, json={"target": target})
     assert response.status_code == 422, response.text
-    assert response.json()["error"]["code"] in ("blocked_destination", "invalid_url", "unsupported_scheme")
+    error = response.json()["error"]
+    assert error["code"] in ("blocked_destination", "invalid_url", "unsupported_scheme")
+    if target in ("localhost", "not a domain"):
+        # the message asks for a domain or a link; no hint may contradict it
+        assert error == {"code": "invalid_url", "message": "Enter a domain like example.com, or a link to a video page."}
     assert all(p["builtin"] for p in (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"])
 
 
@@ -240,9 +257,14 @@ async def test_adding_a_website_checks_it_and_leaves_it_off(make_client: Callabl
     assert checked["status"] == "requires_review" and check["method"] == "generic" and check["qualities"] >= 1
     assert check["max_height"] and check["title"] and check["error_code"] is None
     assert checked["enabled"] is False and checked["can_enable"] is True, "a check never switches anything on"
+    public = (await client.get("/api/v1/platforms")).json()["platforms"]
+    assert platform["id"] not in {p["id"] for p in public}, "a website under review is not shown to visitors"
 
     on = await client.patch(f"/api/v1/admin/platforms/{platform['id']}", headers=headers, json={"enabled": True})
     assert on.json()["active"] is True
+    shown = next(p for p in (await client.get("/api/v1/platforms")).json()["platforms"] if p["id"] == platform["id"])
+    # approved by the administrator, but honest about it: not "supported", and not verified
+    assert shown["enabled"] and shown["status"] == "partial" and shown["verified"] is False and shown["checked_at"]
     again = await client.post("/api/v1/admin/platforms", headers=headers, json={"target": f"{source}/watch/webm"})
     assert again.status_code == 200 and again.json()["id"] == platform["id"], "the same website is not added twice"
     await wait_for_check(client, headers, platform["id"])
@@ -257,6 +279,54 @@ async def test_adding_a_website_checks_it_and_leaves_it_off(make_client: Callabl
     assert (await client.delete(f"/api/v1/admin/platforms/{platform['id']}", headers=headers)).status_code == 204
     assert all(p["builtin"] for p in (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"])
     assert not list((client.app.state.services.storage.root / "analyses").iterdir()), "checks clean up"  # type: ignore[attr-defined]
+
+
+async def test_checking_every_enabled_platform_at_once(
+    make_client: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client: httpx.AsyncClient = await make_client(**ADMIN)
+    headers = await ready_admin(client)
+    services = client.app.state.services  # type: ignore[attr-defined]
+    seen: list[str] = []
+    release = asyncio.Event()
+
+    async def fake_run(self: CompatibilityChecker, platform: Platform, url: str | None) -> None:
+        assert url is None, "a check of everything uses sample links"
+        seen.append(platform.id)
+        await release.wait()
+        services.platforms.set_check(platform, CheckResult(
+            at=time.time(), status="supported", summary="A public video was read.", method="extractor"))
+
+    monkeypatch.setattr(CompatibilityChecker, "_run", fake_run)
+    off = await client.patch("/api/v1/admin/platforms/vimeo", headers=headers, json={"enabled": False})
+    assert off.status_code == 200
+
+    answer = await client.post("/api/v1/admin/platform-checks", headers=headers)
+    assert answer.status_code == 202 and answer.headers["cache-control"] == "no-store"
+    active = [p.id for p in services.platforms.all() if p.active]
+    assert answer.json() == {"started": len(active), "pending": len(active)} and len(active) > 30
+    await asyncio.sleep(0.05)
+    assert sorted(seen) == sorted(active)
+    assert "vimeo" not in seen, "a platform that is switched off is left alone"
+    assert "netflix" not in seen, "a DRM service is never contacted"
+    listing = (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"]
+    assert {p["id"] for p in listing if p["checking"]} == set(active)
+
+    again = await client.post("/api/v1/admin/platform-checks", headers=headers)
+    assert again.json() == {"started": 0, "pending": len(active)}, "nothing is checked twice at the same time"
+
+    release.set()
+    for _ in range(100):
+        listing = (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"]
+        if not any(p["checking"] for p in listing):
+            break
+        await asyncio.sleep(0.02)
+    assert not any(p["checking"] for p in listing)
+    public = {p["id"]: p for p in (await client.get("/api/v1/platforms")).json()["platforms"]}
+    assert public["internet-archive"]["verified"] is True and public["internet-archive"]["status"] == "supported"
+    # one link that worked does not lift the known limits of a platform
+    assert public["youtube"]["verified"] is True and public["youtube"]["status"] == "partial"
+    assert public["vimeo"]["verified"] is False and public["vimeo"]["enabled"] is False
 
 
 async def test_failures_are_remembered_without_the_link(make_client: Callable[..., Any], source: str) -> None:

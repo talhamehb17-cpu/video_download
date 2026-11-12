@@ -32,6 +32,16 @@ def _private(response: Response) -> None:
 
 
 # ------------------------------------------------------------------------------ session
+@router.get("/status", response_model=schemas.AdminAvailability)
+async def availability(
+    response: Response, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("admin"))]
+) -> schemas.AdminAvailability:
+    """Whether signing in is possible at all. Says nothing an anonymous request to any
+    other admin address would not also reveal (503 when the panel is off, 401 when it is on)."""
+    _private(response)
+    return schemas.AdminAvailability(configured=services.admin.configured)
+
+
 @router.post("/login", response_model=schemas.AdminSession)
 async def login(
     body: schemas.AdminLoginRequest, response: Response, services: ServicesDep,
@@ -128,7 +138,7 @@ async def add_platform(
     domain = exempt_host or normalise_domain(body.target)
     if domain is None:
         raise AppError("invalid_url", message="Enter a domain like example.com, or a link to a video page.",
-                       hint=None)
+                       hint="")  # the usual hint ("paste the full address") would contradict the message
     if exempt_host is None:
         # Run the address through the same checks as any link (internal names, block list).
         await _validated_link(services, link or f"https://{domain}/")
@@ -163,6 +173,18 @@ async def check_platform(
         link = validated.url
     services.checker.start(platform, link)
     return admin_platform(platform, services)
+
+
+@router.post("/platform-checks", response_model=schemas.AdminBulkCheck, status_code=202)
+async def check_enabled_platforms(response: Response, services: ServicesDep, _: AdminDep) -> schemas.AdminBulkCheck:
+    """Check every platform that is switched on, with sample links, two at a time.
+
+    This is how the administrator finds out what really works from this server's
+    network address. Nothing is switched on by it.
+    """
+    _private(response)
+    started = services.checker.start_many([p for p in services.platforms.all() if p.active])
+    return schemas.AdminBulkCheck(started=started, pending=services.checker.pending)
 
 
 @router.patch("/platforms/{platform_id}", response_model=schemas.AdminPlatform)

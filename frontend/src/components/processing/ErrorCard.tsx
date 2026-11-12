@@ -1,6 +1,6 @@
-import { Hourglass, Link2Off, Lock, Radio, RotateCcw, ShieldAlert, TriangleAlert, Unplug, type LucideIcon } from 'lucide-react'
-
-import { useState } from 'react'
+import { m } from 'framer-motion'
+import { Ban, HardDrive, Hourglass, Link2Off, Lock, Radio, RotateCcw, Scale, ShieldAlert, TriangleAlert, Unplug, type LucideIcon } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 
 import { useCountdown } from '../../hooks/useCountdown'
 import type { ApiError } from '../../lib/api'
@@ -13,6 +13,12 @@ const ICONS: Record<string, LucideIcon> = {
   not_found: Link2Off,
   blocked_destination: ShieldAlert,
   domain_not_allowed: ShieldAlert,
+  platform_disabled: Ban,
+  platform_unsupported: Lock,
+  file_too_large: Scale,
+  too_long: Scale,
+  insufficient_storage: HardDrive,
+  storage_full: HardDrive,
   private_content: Lock,
   login_required: Lock,
   paywalled: Lock,
@@ -36,7 +42,7 @@ interface ErrorCardProps {
   /** What was being attempted, e.g. the link. */
   subject?: string
   /** Something this page knows that helps with the error, shown after the server's hint. */
-  note?: string
+  note?: ReactNode
   onRetry?: () => void
   onDismiss?: () => void
   retryLabel?: string
@@ -55,9 +61,15 @@ export function ErrorCard({ error, subject, note, onRetry, onDismiss, retryLabel
   return (
     <div role="alert" className="glass rounded-3xl border-bad/25 p-5 text-left sm:p-6">
       <div className="flex gap-4">
-        <div className="grid size-11 shrink-0 place-items-center rounded-2xl border border-bad/30 bg-bad/10 text-bad">
+        {/* One short shake draws the eye to what went wrong, then everything is still. */}
+        <m.div
+          initial={{ scale: 0.6, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1, x: [0, -5, 5, -3, 3, 0] }}
+          transition={{ duration: 0.5, ease: 'easeOut' }}
+          className="grid size-11 shrink-0 place-items-center rounded-2xl border border-bad/30 bg-bad/10 text-bad"
+        >
           <Icon className="size-5" aria-hidden />
-        </div>
+        </m.div>
         <div className="min-w-0 flex-1">
           <p className="font-display text-lg font-semibold tracking-tight text-ink">{error.message}</p>
           {error.hint && <p className="mt-1 text-sm leading-relaxed text-ink-soft">{error.hint}</p>}

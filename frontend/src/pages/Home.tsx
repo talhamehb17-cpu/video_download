@@ -5,14 +5,18 @@ import { ProcessingArea } from '../components/processing/ProcessingArea'
 import { Faq } from '../components/sections/Faq'
 import { Features } from '../components/sections/Features'
 import { HowItWorks } from '../components/sections/HowItWorks'
+import { Platforms } from '../components/sections/Platforms'
 import { useDownloader } from '../hooks/useDownloader'
 import type { ServiceState } from '../hooks/useServiceStatus'
+import { ApiError } from '../lib/api'
+import { refusalFor, usable, type PlatformList } from '../lib/platforms'
 import { usePageEntry } from '../lib/router'
 import { NAV_LINKS } from '../lib/site'
 
 interface HomeProps {
   service: ServiceState
   onRetryService: () => void
+  refreshPlatforms: () => Promise<PlatformList | null>
   onActiveSection: (id: string | null) => void
 }
 
@@ -42,11 +46,32 @@ function useActiveSection(onChange: (id: string | null) => void) {
   }, [onChange])
 }
 
-export default function Home({ service, onRetryService, onActiveSection }: HomeProps) {
+export default function Home({ service, onRetryService, refreshPlatforms, onActiveSection }: HomeProps) {
   const downloader = useDownloader()
   const [url, setUrl] = useState('')
   const input = useRef<HTMLInputElement | null>(null)
   const config = service.status === 'online' ? service.config : null
+  const platforms = service.status === 'online' ? service.platforms : null
+
+  // A link the service's own list rules out is answered here, at once, instead of
+  // being sent only to be declined. The list is fetched again first, so a platform
+  // that was switched on a minute ago is not turned away by an old copy; if the
+  // list cannot be fetched, the link is sent and the service decides.
+  const { analyze, refuse } = downloader
+  const submit = useCallback(
+    (link: string) => {
+      if (!refusalFor(platforms, link)) {
+        analyze(link)
+        return
+      }
+      void refreshPlatforms().then((latest) => {
+        const refusal = refusalFor(latest, link)
+        if (refusal) refuse(link, new ApiError(refusal.code, refusal.message, { hint: refusal.hint, status: 422 }))
+        else analyze(link)
+      })
+    },
+    [platforms, analyze, refuse, refreshPlatforms],
+  )
 
   usePageEntry()
   useActiveSection(onActiveSection)
@@ -66,17 +91,14 @@ export default function Home({ service, onRetryService, onActiveSection }: HomeP
         onRetryService={onRetryService}
         url={url}
         onUrlChange={setUrl}
-        onSubmit={downloader.analyze}
+        onSubmit={submit}
         busy={downloader.phase.name === 'analyzing'}
         inputRef={input}
       >
-        <ProcessingArea
-          downloader={downloader}
-          acceptedDomains={config?.sources.mode === 'allowlist' ? config.sources.domains : null}
-          onStartOver={startOver}
-        />
+        <ProcessingArea downloader={downloader} platformCount={usable(platforms).length} onStartOver={startOver} />
       </Hero>
       <Features config={config} />
+      <Platforms list={platforms} />
       <HowItWorks />
       <Faq config={config} />
     </main>

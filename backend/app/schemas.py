@@ -148,6 +148,7 @@ class Capabilities(BaseModel):
     subtitle_conversion: bool
     subtitle_embedding: bool
     subtitle_formats: list[str]
+    platform_list: bool = Field(default=True, description="GET /api/v1/platforms exists (API 1.1 and later).")
 
 
 class Example(BaseModel):
@@ -173,6 +174,8 @@ class PlatformInfo(BaseModel):
     domains: list[str] = Field(description="Addresses of the platform. 'name.*' also covers country versions.")
     status: PublicStatus
     enabled: bool = Field(description="Links from this platform are accepted right now.")
+    verified: bool = Field(description="A compatibility check on this server read a public video.")
+    checked_at: float | None = Field(default=None, description="When that check ran (Unix time).")
     note: str | None = None
     region: str
 
@@ -210,6 +213,10 @@ class AdminPasswordRequest(RequestModel):
 
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=1, max_length=256)
+
+
+class AdminAvailability(BaseModel):
+    configured: bool = Field(description="An administrator account exists, so signing in is possible.")
 
 
 class AdminSession(BaseModel):
@@ -274,6 +281,11 @@ class AdminPlatformUpdate(RequestModel):
 
 class AdminCheckRequest(RequestModel):
     url: str | None = Field(default=None, max_length=2048, description="Link to test. Empty = sample links.")
+
+
+class AdminBulkCheck(BaseModel):
+    started: int = Field(description="Checks queued by this request.")
+    pending: int = Field(description="Checks running or waiting for their turn, in total.")
 
 
 class AdminErrorEntry(BaseModel):

@@ -112,6 +112,10 @@ def interpret(result: dict[str, Any], *, given_url: str | None, seconds: float) 
     ), **base)
 
 
+# Checks that may wait for their turn at once: enough for every platform on the list.
+MAX_PENDING = 120
+
+
 class CompatibilityChecker:
     """Runs checks in the background, one per platform and two at a time overall."""
 
@@ -129,12 +133,26 @@ class CompatibilityChecker:
     def start(self, platform: Platform, url: str | None) -> None:
         if platform.checking:
             raise AppError("check_in_progress")
-        if len(self._tasks) >= 8:
+        if len(self._tasks) >= MAX_PENDING:
             raise AppError("server_busy", retry_after=20)
         platform.checking = True
         task = asyncio.create_task(self._run(platform, url), name=f"check-{platform.id}")
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def start_many(self, platforms: list[Platform]) -> int:
+        """Queue a check with sample links for each platform that has none running. Returns how many."""
+        started = 0
+        for platform in platforms:
+            if platform.checking or platform.declared == "unsupported" or len(self._tasks) >= MAX_PENDING:
+                continue
+            self.start(platform, None)
+            started += 1
+        return started
+
+    @property
+    def pending(self) -> int:
+        return len(self._tasks)
 
     async def _run(self, platform: Platform, url: str | None) -> None:
         started = time.monotonic()
@@ -142,6 +160,7 @@ class CompatibilityChecker:
         directory = self._storage.create("analyses", f"check-{self._serial:06d}-{int(time.time())}")
         try:
             async with self._slots:
+                started = time.monotonic()  # time spent waiting for a turn is not part of the check
                 result = await run_worker(
                     {
                         "task": "compat", "work_dir": str(directory), "ffmpeg_path": self._ffmpeg_path,

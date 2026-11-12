@@ -6,7 +6,7 @@ import { SectionHeading } from './SectionHeading'
 
 const STEPS: Array<{ icon: LucideIcon; title: string; text: string }> = [
   { icon: ClipboardPaste, title: 'Paste URL', text: 'Copy the address of a public video page and paste it into the field.' },
-  { icon: ScanSearch, title: 'Analyze', text: 'The server checks the link and reads the title, preview, duration, qualities and subtitles.' },
+  { icon: ScanSearch, title: 'Analyze', text: 'Lumora recognises the platform, checks the link and reads the title, preview, duration, qualities and subtitles.' },
   { icon: SlidersHorizontal, title: 'Choose quality & subtitles', text: 'Pick a resolution and format, and decide which subtitle tracks you want.' },
   { icon: ArrowDownToLine, title: 'Download', text: 'Watch the file being prepared, then save it. It is deleted from the server afterwards.' },
 ]

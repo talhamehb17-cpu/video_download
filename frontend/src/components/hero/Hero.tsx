@@ -4,6 +4,8 @@ import type { ReactNode, RefObject } from 'react'
 
 import type { ServiceState } from '../../hooks/useServiceStatus'
 import { formatSpan } from '../../lib/format'
+import { Link } from '../../lib/Link'
+import { detect, featured, summarise } from '../../lib/platforms'
 import { listSources } from '../../lib/site'
 import { ServicePill } from './ServicePill'
 import { UrlForm } from './UrlForm'
@@ -46,13 +48,26 @@ function fade(delay: number) {
 
 export function Hero({ service, onRetryService, url, onUrlChange, onSubmit, busy, inputRef, children }: HeroProps) {
   const config = service.status === 'online' ? service.config : null
+  const platforms = service.status === 'online' ? service.platforms : null
   const examples = config?.sources.examples ?? []
+  const known = featured(platforms)
 
   let sourcesNote: ReactNode
   if (config?.sources.mode === 'allowlist') {
     sourcesNote = (
       <>
         Works with public videos from <span className="text-ink-soft">{listSources(config.sources.domains)}</span>.
+      </>
+    )
+  } else if (known.length > 0) {
+    // What a platform really delivers differs from one to the next, so the list says it per platform.
+    sourcesNote = (
+      <>
+        Recognises links from <span className="text-ink-soft">{summarise(known, 4)}</span>.{' '}
+        <Link to="/#platforms" className="text-ink-soft underline decoration-line-strong underline-offset-4 hover:text-ink">
+          See what works on each
+        </Link>
+        .
       </>
     )
   } else if (config) {
@@ -86,12 +101,19 @@ export function Hero({ service, onRetryService, url, onUrlChange, onSubmit, busy
       </h1>
 
       <m.p {...fade(0.5)} className="mx-auto mt-6 max-w-xl text-[17px] leading-relaxed text-ink-soft sm:text-lg">
-        Paste a link. Lumora reads what the source really offers and prepares a clean download, with subtitles, in the
-        quality you choose.
+        Paste a link. Lumora recognises the platform, reads what it really offers and prepares a clean download, with
+        subtitles, in the quality you choose.
       </m.p>
 
       <m.div {...fade(0.62)} className="mx-auto mt-9 max-w-3xl">
-        <UrlForm value={url} onChange={onUrlChange} onSubmit={onSubmit} busy={busy} inputRef={inputRef} />
+        <UrlForm
+          value={url}
+          onChange={onUrlChange}
+          onSubmit={onSubmit}
+          busy={busy}
+          inputRef={inputRef}
+          detection={detect(platforms, url)}
+        />
 
         {examples.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-[13px]">

@@ -2,7 +2,7 @@ import { AnimatePresence, m } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 
 import type { Downloader } from '../../hooks/useDownloader'
-import { listSources } from '../../lib/site'
+import { Link } from '../../lib/Link'
 import { AnalyzingCard } from './AnalyzingCard'
 import { ErrorCard } from './ErrorCard'
 import { JobPanel } from './JobPanel'
@@ -10,16 +10,18 @@ import { ResultCard } from './ResultCard'
 
 interface ProcessingAreaProps {
   downloader: Downloader
-  /** The domains this service accepts, when it works from an allow list. */
-  acceptedDomains: string[] | null
+  /** How many platforms this service works with (0 when that is not known). */
+  platformCount: number
   /** Clear everything and put the cursor back in the link field. */
   onStartOver: () => void
 }
 
 const TRANSITION = { duration: 0.45, ease: [0.16, 1, 0.3, 1] as const }
 
-/** Everything that happens after "Download" is pressed, one state at a time. */
-export function ProcessingArea({ downloader, acceptedDomains, onStartOver }: ProcessingAreaProps) {
+/** Everything that happens after "Analyze" is pressed, one state at a time. */
+const PLATFORM_ERRORS = new Set(['domain_not_allowed', 'platform_disabled', 'platform_unsupported'])
+
+export function ProcessingArea({ downloader, platformCount, onStartOver }: ProcessingAreaProps) {
   const { phase } = downloader
   const container = useRef<HTMLDivElement | null>(null)
 
@@ -39,11 +41,17 @@ export function ProcessingArea({ downloader, acceptedDomains, onStartOver }: Pro
         <ErrorCard
           error={phase.error}
           subject={phase.url}
-          // A link from a site that is not enabled: say which ones are.
+          // A link this service does not take: point to the ones it does.
           note={
-            phase.error.code === 'domain_not_allowed' && acceptedDomains?.length
-              ? `Links from these sources work: ${listSources(acceptedDomains)}.`
-              : undefined
+            PLATFORM_ERRORS.has(phase.error.code) && platformCount > 0 ? (
+              <>
+                Links from {platformCount} platform{platformCount === 1 ? '' : 's'} work.{' '}
+                <Link to="/#platforms" className="font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink">
+                  See the list
+                </Link>
+                .
+              </>
+            ) : undefined
           }
           // Only offer "Try again" when asking again could change the answer.
           onRetry={phase.error.retryable ? () => downloader.analyze(phase.url) : undefined}
@@ -95,7 +103,7 @@ export function ProcessingArea({ downloader, acceptedDomains, onStartOver }: Pro
     const node = container.current
     if (!node) return
     const rect = node.getBoundingClientRect()
-    const requested = previous === 'idle' // the visitor has just pressed "Download"
+    const requested = previous === 'idle' // the visitor has just pressed "Analyze"
     const watching = rect.bottom > 0 && rect.top < window.innerHeight
     if (!requested && !watching) return
     if (rect.top < 72 || rect.top > window.innerHeight * 0.3) {

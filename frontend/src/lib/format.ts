@@ -93,3 +93,19 @@ export function hostnameOf(value: string): string | null {
     return null
   }
 }
+
+/** How long ago a moment was, given both in Unix seconds: "just now", "5 min ago", "3 days ago". */
+export function formatAgo(then: number, now: number = Date.now() / 1000): string {
+  const seconds = Math.max(0, now - then)
+  if (seconds < 45) return 'just now'
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} min ago`
+  if (seconds < 86_400) return `${Math.round(seconds / 3600)} h ago`
+  const days = Math.round(seconds / 86_400)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}
+
+/** How long a service has been running: "12 minutes", "5.5 hours", "9 days". */
+export function formatUptime(seconds: number): string {
+  if (seconds < 172_800) return formatSpan(seconds)
+  return `${Math.floor(seconds / 86_400)} days`
+}

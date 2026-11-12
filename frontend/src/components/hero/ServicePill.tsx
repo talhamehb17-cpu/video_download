@@ -2,6 +2,7 @@ import { LoaderCircle, RotateCcw } from 'lucide-react'
 
 import type { ServiceState } from '../../hooks/useServiceStatus'
 import { cn } from '../../lib/cn'
+import { usable } from '../../lib/platforms'
 
 interface ServicePillProps {
   state: ServiceState
@@ -26,11 +27,12 @@ export function ServicePill({ state, onRetry }: ServicePillProps) {
       break
     case 'online': {
       const { sources } = state.config
+      const count = usable(state.platforms).length
       dot = 'bg-ok shadow-[0_0_10px_2px_color-mix(in_oklab,var(--ok)_55%,transparent)]'
-      text =
-        sources.mode === 'allowlist'
-          ? `Service online · ${sources.domains.length} trusted source${sources.domains.length === 1 ? '' : 's'} enabled`
-          : 'Service online'
+      if (sources.mode === 'allowlist')
+        text = `Service online · ${sources.domains.length} trusted source${sources.domains.length === 1 ? '' : 's'} enabled`
+      else if (count > 0) text = `Service online · ${count} platform${count === 1 ? '' : 's'} enabled`
+      else text = 'Service online'
       break
     }
     case 'offline':

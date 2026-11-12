@@ -141,6 +141,8 @@ export interface Downloader {
   selectedQuality: Quality | null
   embedIds: string[]
   analyze: (url: string) => void
+  /** Show why a link cannot be processed, without sending it. */
+  refuse: (url: string, error: ApiError) => void
   cancelAnalyze: () => void
   reset: () => void
   selectQuality: (id: string) => void
@@ -174,6 +176,11 @@ export function useDownloader(): Downloader {
         if (isAbort(error) || controller.signal.aborted) return
         dispatch({ type: 'failed', url, error: toApiError(error) })
       })
+  }, [])
+
+  const refuse = useCallback((url: string, error: ApiError) => {
+    analyzeAbort.current?.abort()
+    dispatch({ type: 'failed', url, error })
   }, [])
 
   const cancelAnalyze = useCallback(() => {
@@ -284,6 +291,7 @@ export function useDownloader(): Downloader {
     selectedQuality,
     embedIds: state.embedIds,
     analyze,
+    refuse,
     cancelAnalyze,
     reset,
     selectQuality: useCallback((id: string) => dispatch({ type: 'selectQuality', id }), []),

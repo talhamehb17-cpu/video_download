@@ -102,9 +102,16 @@ export function ResultCard({
                 <span className="truncate">{analysis.uploader}</span>
               </li>
             )}
-            <li className="inline-flex items-center gap-1.5">
-              <Globe className="size-3.5 text-ink-mute" aria-hidden />
-              {analysis.source.domain}
+            <li className="inline-flex min-w-0 items-center gap-1.5">
+              <Globe className="size-3.5 shrink-0 text-ink-mute" aria-hidden />
+              {analysis.source.platform ? (
+                <>
+                  <span className="font-medium text-ink">{analysis.source.platform}</span>
+                  <span className="truncate text-ink-mute">{analysis.source.domain}</span>
+                </>
+              ) : (
+                <span className="truncate">{analysis.source.domain}</span>
+              )}
             </li>
             {analysis.duration != null && (
               <li className="inline-flex items-center gap-1.5">

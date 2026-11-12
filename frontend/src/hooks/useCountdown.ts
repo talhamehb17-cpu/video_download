@@ -29,3 +29,13 @@ export function useElapsed(since: number | null): number {
   const now = useNow(since !== null)
   return since === null ? 0 : Math.max(0, Math.floor((now - since) / 1000))
 }
+
+/** The current time (`Date.now()`), refreshed every `everyMs`: for "5 min ago" style texts. */
+export function useClock(everyMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), everyMs)
+    return () => window.clearInterval(id)
+  }, [everyMs])
+  return now
+}

@@ -11,9 +11,17 @@ export const CONTACT = contactEmail
   ? { href: `mailto:${contactEmail}`, label: contactEmail, external: false }
   : { href: `${REPOSITORY_URL}/issues`, label: 'Open an issue on GitHub', external: true }
 
+/**
+ * Where the administrator's page lives. Nothing links to it and search engines
+ * are told to skip it, but it is not a secret (this file is public): what protects
+ * the panel is the sign-in the API demands, not the address.
+ */
+export const ADMIN_PATH = '/devzardhft'
+
 export const NAV_LINKS = [
   { id: 'top', label: 'Home', to: '/#top' },
   { id: 'features', label: 'Features', to: '/#features' },
+  { id: 'platforms', label: 'Platforms', to: '/#platforms' },
   { id: 'how-it-works', label: 'How It Works', to: '/#how-it-works' },
   { id: 'faq', label: 'FAQ', to: '/#faq' },
 ] as const

@@ -240,13 +240,22 @@ async def test_public_platform_list(make_client: Callable[..., Any]) -> None:
     assert by_id["dailymotion"]["status"] == "supported" and "dai.ly" in by_id["dailymotion"]["domains"]
     assert by_id["netflix"] == {
         "id": "netflix", "name": "Netflix", "domains": ["netflix.com"], "status": "unsupported", "enabled": False,
+        "verified": False, "checked_at": None,
         "note": "Protected with DRM. Lumora never circumvents DRM.", "region": "drm",
     }
+    assert not any(p["verified"] for p in body["platforms"]), "nothing is verified before a check has run"
+    assert (await client.get("/api/v1/config")).json()["capabilities"]["platform_list"] is True
     assert {p["status"] for p in body["platforms"]} <= {"supported", "partial", "unsupported"}
 
-    narrowed = await make_client(source_policy="allowlist", allowed_domains=["archive.org"])
-    listed = {p["id"]: p["enabled"] for p in (await narrowed.get("/api/v1/platforms")).json()["platforms"]}
-    assert listed["internet-archive"] is True and listed["youtube"] is False
+    narrowed = await make_client(source_policy="allowlist", allowed_domains=["archive.org", "videos.example.org"])
+    answer = (await narrowed.get("/api/v1/platforms")).json()
+    listed = {p["id"]: p["enabled"] for p in answer["platforms"]}
+    assert answer["mode"] == "allowlist" and listed["internet-archive"] is True and listed["youtube"] is False
+    # a domain the operator allows is accepted even though no platform is known for it, and the list says so
+    extra = next(p for p in answer["platforms"] if p["domains"] == ["videos.example.org"])
+    assert extra["enabled"] is True and extra["status"] == "partial" and extra["verified"] is False
+    assert extra["id"] == "allowed-videos-example-org" and "operator" in extra["note"]
+    assert sum(1 for p in answer["platforms"] if p["enabled"]) == 2
 
     blocked = await make_client(blocked_domains=["tiktok.com"])
     listed = {p["id"]: p["enabled"] for p in (await blocked.get("/api/v1/platforms")).json()["platforms"]}

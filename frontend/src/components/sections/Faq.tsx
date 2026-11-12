@@ -30,6 +30,22 @@ function entries(config: ServiceConfig | null): Entry[] {
         <p>Links from other sites are declined with a clear message. The operator of this service decides which sources are enabled.</p>
       </>
     )
+  } else if (sources?.mode === 'platforms') {
+    sourceAnswer = (
+      <>
+        <p>
+          Lumora recognises the platform from the link you paste and tells you what to expect before anything is sent. The{' '}
+          <Link to="/#platforms" className="font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink">
+            list of platforms
+          </Link>{' '}
+          shows each one as supported, partially supported or not supported, and says whether it has been checked on this server.
+        </p>
+        <p>
+          A link works only if the video is public and can be watched without signing in. Large platforms sometimes turn servers
+          away; Lumora then says so plainly and never signs in or works around it. Services protected with DRM are never possible.
+        </p>
+      </>
+    )
   } else if (sources) {
     sourceAnswer = (
       <p>
@@ -47,7 +63,7 @@ function entries(config: ServiceConfig | null): Entry[] {
   }
 
   return [
-    { question: 'Which sources work?', answer: sourceAnswer },
+    { question: 'Which platforms work?', answer: sourceAnswer },
     {
       question: 'Are subtitles always available?',
       answer: (
@@ -87,7 +103,8 @@ function entries(config: ServiceConfig | null): Entry[] {
           <ul className="list-disc space-y-1.5 pl-5">
             <li>The video is private, needs a sign-in, or is behind a paywall or age check.</li>
             <li>It is region-locked, DRM-protected, or a live stream that hasn’t finished.</li>
-            <li>The page has no video, the link is mistyped, or the source isn’t enabled here.</li>
+            <li>The page has no video, the link is mistyped, or the platform isn’t on this service’s list.</li>
+            <li>The platform turned the server away, asking it to sign in or prove it is not a robot. Large platforms do this often.</li>
             <li>
               The file is too large{limits ? ` (over ${formatBytes(limits.max_file_size_bytes, { trim: true })})` : ''} or the video too long
               {limits ? ` (over ${formatSpan(limits.max_duration_seconds)})` : ''}.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import asdict
 
@@ -177,6 +178,8 @@ def health_response(services: Services) -> schemas.HealthResponse:
 
 # ---------------------------------------------------------------------------- platforms
 _UNCONFIRMED = "Not confirmed on this server yet, so links may fail."
+_ALLOWED_BY_OPERATOR = "Enabled by the operator of this service. There is no dedicated integration, so links may fail."
+_SLUG = re.compile(r"[^a-z0-9]+")
 
 
 def _accepts(platform: Platform, services: Services) -> bool:
@@ -185,7 +188,8 @@ def _accepts(platform: Platform, services: Services) -> bool:
     if any(domain_matches(d.removesuffix(".*"), settings.blocked_domains) for d in platform.domains):
         return False
     if settings.source_policy == "allowlist":
-        return platform.can_enable and any(
+        # With an allow list the switches and check results are not consulted (see SourcePolicy.check_domain).
+        return platform.declared != "unsupported" and any(
             domain_matches(d.removesuffix(".*"), settings.allowed_domains) for d in platform.domains
         )
     return platform.active
@@ -202,11 +206,24 @@ def platforms_response(services: Services) -> schemas.PlatformsResponse:
         note = platform.note
         if status == "requires_review":
             status, note = "partial", note or _UNCONFIRMED
+        check = platform.check
+        verified = check is not None and check.error_code is None and check.status in ("supported", "partial")
         items.append(schemas.PlatformInfo(
             id=platform.id, name=platform.name, domains=list(platform.domains), status=status,  # type: ignore[arg-type]
-            enabled=accepted, note=note, region=platform.region,
+            enabled=accepted, verified=verified, checked_at=check.at if check else None, note=note,
+            region=platform.region,
         ))
-    return schemas.PlatformsResponse(mode=services.settings.source_policy, platforms=items)
+    settings = services.settings
+    if settings.source_policy == "allowlist":
+        # Domains the operator allows that belong to no known platform are accepted too;
+        # leaving them out would tell visitors that a working link is not possible.
+        for domain in sorted(set(settings.allowed_domains)):
+            if services.platforms.match(domain) is None and not domain_matches(domain, settings.blocked_domains):
+                items.append(schemas.PlatformInfo(
+                    id=f"allowed-{_SLUG.sub('-', domain).strip('-')}", name=domain, domains=[domain], status="partial",
+                    enabled=True, verified=False, checked_at=None, note=_ALLOWED_BY_OPERATOR, region="custom",
+                ))
+    return schemas.PlatformsResponse(mode=settings.source_policy, platforms=items)
 
 
 def admin_platform(platform: Platform, services: Services) -> schemas.AdminPlatform:

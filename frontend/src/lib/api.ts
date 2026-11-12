@@ -5,6 +5,8 @@
  * app calls relative `/api/...` paths, which the dev server proxies to a local API.
  */
 
+import { platformsFromDomains, type PlatformList } from './platforms'
+
 export const API_BASE: string = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
 
 /** False for a production build that was never given an API address. */
@@ -59,7 +61,7 @@ export interface Analysis {
   uploader: string | null
   duration: number | null
   thumbnail_url: string | null
-  source: { domain: string; extractor: string }
+  source: { domain: string; extractor: string; platform?: string | null }
   qualities: Quality[]
   subtitles: SubtitleTrack[]
   notices: Notice[]
@@ -84,6 +86,7 @@ export interface ErrorBody {
   message: string
   hint?: string | null
   retry_after?: number | null
+  fields?: Array<{ field: string; message: string }> | null
 }
 
 export interface Job {
@@ -116,9 +119,11 @@ export interface ServiceConfig {
     subtitle_conversion: boolean
     subtitle_embedding: boolean
     subtitle_formats: string[]
+    /** The API has the platform list and the admin panel (version 1.1 and later). */
+    platform_list?: boolean
   }
   sources: {
-    mode: 'open' | 'allowlist'
+    mode: 'platforms' | 'open' | 'allowlist'
     domains: string[]
     examples: Array<{ label: string; source: string; url: string }>
   }
@@ -138,6 +143,11 @@ export class ApiError extends Error {
     this.hint = options.hint ?? null
     this.status = options.status ?? 0
     this.retryAfter = options.retryAfter ?? null
+  }
+
+  /** The API has no such address: it is older than this website. */
+  get isMissingEndpoint(): boolean {
+    return this.status === 404 && this.code === 'not_found_route'
   }
 
   /**
@@ -170,7 +180,7 @@ function notConfigured(): ApiError {
   })
 }
 
-async function send(path: string, init: RequestInit = {}): Promise<Response> {
+export async function send(path: string, init: RequestInit = {}): Promise<Response> {
   if (!API_CONFIGURED) throw notConfigured()
   try {
     return await fetch(apiUrl(path), {
@@ -189,14 +199,16 @@ async function send(path: string, init: RequestInit = {}): Promise<Response> {
   }
 }
 
-async function failure(response: Response): Promise<ApiError> {
+export async function failure(response: Response): Promise<ApiError> {
   const isJson = (response.headers.get('content-type') ?? '').includes('application/json')
   if (isJson) {
     try {
       const body = (await response.json()) as { error?: ErrorBody }
       if (body.error?.code && body.error.message) {
+        // A rejected request says which fields were wrong; show that instead of nothing.
+        const fields = (body.error.fields ?? []).map((item) => `${item.field}: ${item.message}`).join('; ')
         return new ApiError(body.error.code, body.error.message, {
-          hint: body.error.hint,
+          hint: body.error.hint ?? (fields || null),
           status: response.status,
           retryAfter: body.error.retry_after ?? (Number(response.headers.get('retry-after')) || null),
         })
@@ -211,7 +223,7 @@ async function failure(response: Response): Promise<ApiError> {
   })
 }
 
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
+export async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await send(path, init)
   const isJson = (response.headers.get('content-type') ?? '').includes('application/json')
   if (!response.ok || !isJson) throw await failure(response)
@@ -237,6 +249,15 @@ export function filenameFromDisposition(header: string | null): string | null {
 export const api = {
   config(signal?: AbortSignal): Promise<ServiceConfig> {
     return json<ServiceConfig>('/api/v1/config', { signal })
+  },
+
+  /**
+   * The platform list. An API from before the list existed says so in its
+   * configuration; it is not asked, and the list is built from the domains it names.
+   */
+  async platforms(config: ServiceConfig, signal?: AbortSignal): Promise<PlatformList> {
+    if (!config.capabilities.platform_list) return platformsFromDomains(config.sources.mode, config.sources.domains)
+    return json<PlatformList>('/api/v1/platforms', { signal })
   },
 
   analyze(url: string, signal?: AbortSignal): Promise<Analysis> {
