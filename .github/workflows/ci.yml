@@ -12,6 +12,10 @@ on:
         description: Also download from real public sources (Internet Archive, Wikimedia Commons)
         type: boolean
         default: true
+      site_check:
+        description: Also open the live website in a browser and download a video through it
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -150,3 +154,45 @@ jobs:
       # example link, with the default production policy. Results go to the run summary.
       - name: Download from the example sources
         run: python scripts/live_smoke.py
+
+  site-check:
+    name: Live website
+    # Opens the live website in a real browser and downloads a video through it, so
+    # it tests what visitors get: the deployed site, the deployed API and the real
+    # sources together. Like the job above it never runs on ordinary pushes: start it
+    # by hand, on the weekly schedule, or by putting "[site-check]" in a commit
+    # message. Only in the repository the site is deployed from, never in forks.
+    if: >-
+      github.repository == 'talhamehb17-cpu/video_download' && (
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.site_check) ||
+        (github.event_name == 'push' && contains(github.event.head_commit.message, '[site-check]'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The address visitors use. Change it here when the site moves.
+      SITE_URL: https://lumora-video.vercel.app
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install
+        run: npm ci
+      # Uses the Chrome that the runner image ships. Results go to the run summary.
+      - name: Download a video through the live website
+        run: node check-site.mjs "$SITE_URL" --out report
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-website
+          path: e2e/report
+          if-no-files-found: ignore
+          retention-days: 14

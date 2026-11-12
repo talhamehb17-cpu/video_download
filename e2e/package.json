@@ -1,0 +1,16 @@
+{
+  "name": "lumora-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Opens a deployed Lumora website in a real browser and downloads a video through it.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "check": "node check-site.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "25.17.0"
+  }
+}

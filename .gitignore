@@ -24,6 +24,9 @@ dist/
 lumora-media/
 *.part
 
+# Screenshots from the live-site check
+e2e/report/
+
 # Tooling
 .vercel/
 .DS_Store
