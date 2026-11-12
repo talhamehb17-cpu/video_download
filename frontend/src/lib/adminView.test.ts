@@ -42,7 +42,7 @@ describe('platform filters', () => {
 describe('check facts', () => {
   const check: AdminCheck = {
     at: 1, status: 'supported', summary: '', method: 'extractor', extractor: 'Vimeo', url: null, title: null, qualities: 6,
-    max_height: 1080, subtitles: 1, error_code: null, error_message: null, seconds: 3.26,
+    max_height: 1080, subtitles: 1, error_code: null, error_message: null, seconds: 3.26, conclusive: true,
   }
 
   it('describes what was found', () => {

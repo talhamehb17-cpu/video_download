@@ -9,7 +9,12 @@ of four states:
 * ``partial``         - it works with limits (audio only, or known limits of the platform).
 * ``unsupported``     - nothing can be downloaded within the rules of this service.
 * ``requires_review`` - a person has to decide: only the generic reader found a
-  video, the platform turned this server away, or there was nothing to test.
+  video on a website that is not in the catalog, or the platform turned this
+  server away.
+
+A check that had no link to test, or that could not be completed, is recorded as
+not conclusive: the administrator sees why, and the status stays what it was
+going to be without it.
 
 Adding or checking a website never switches it on. That is a separate decision.
 """
@@ -20,6 +25,7 @@ import asyncio
 import logging
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.errors import ERRORS, AppError
@@ -45,8 +51,14 @@ def _message(code: str) -> str:
     return spec.message
 
 
-def interpret(result: dict[str, Any], *, given_url: str | None, seconds: float) -> CheckResult:
-    """Turn the worker's observations into a state and one sentence."""
+def interpret(
+    result: dict[str, Any], *, given_url: str | None, seconds: float, catalogued: bool = False
+) -> CheckResult:
+    """Turn the worker's observations into a state and one sentence.
+
+    ``catalogued`` says the website is a platform of the built-in catalog, where a
+    person already decided that it belongs on the list.
+    """
     integrations = [str(name) for name in result.get("integrations") or []]
     attempts = [a for a in result.get("attempts") or [] if isinstance(a, dict)]
     now = time.time()
@@ -67,6 +79,11 @@ def interpret(result: dict[str, Any], *, given_url: str | None, seconds: float) 
             "method": "extractor" if dedicated else "generic",
             "extractor": str(success.get("extractor")) if dedicated else None,
         }
+        if not dedicated and catalogued:
+            return CheckResult(status="partial", summary=(
+                "A generic reader found a public video on the page without signing in. "
+                "Pages that publish a plain video file work; other pages may not."
+            ), **base)
         if not dedicated:
             return CheckResult(status="requires_review", summary=(
                 "There is no dedicated integration for this website. A generic reader found a video on the page. "
@@ -78,17 +95,26 @@ def interpret(result: dict[str, Any], *, given_url: str | None, seconds: float) 
         return CheckResult(status="supported", summary=f"A public video was read{height} without signing in.", **base)
 
     if not attempts:
-        summary = (
-            "An integration exists, but there was no link to test it with. Paste a link to a public video."
-            if integrations else
-            "No integration is known for this website. Paste a link to a page with a video to test it."
-        )
-        return CheckResult(status="requires_review", summary=summary, **base)
+        if integrations:
+            summary = "An integration exists, but there was no link to test it with. Paste a link to a public video."
+        elif catalogued:
+            summary = "There are no sample links for this platform. Paste a link to a page with a video to test it."
+        else:
+            summary = "No integration is known for this website. Paste a link to a page with a video to test it."
+        return CheckResult(status="requires_review", summary=summary, conclusive=False, **base)
 
-    last = attempts[-1]
-    code = str(last.get("code") or "extraction_failed")
-    base |= {"url": str(last.get("url")), "error_code": code, "error_message": _message(code)}
-    tried = "the link" if given_url else f"{len(attempts)} sample link{'s' if len(attempts) != 1 else ''}"
+    # Sample links are of different kinds, and one of them may simply be gone. What
+    # happened to most of them describes the platform best; the first decides a tie.
+    codes = [str(attempt.get("code") or "extraction_failed") for attempt in attempts]
+    code = max(dict.fromkeys(codes), key=codes.count)
+    shown = attempts[codes.index(code)]
+    base |= {"url": str(shown.get("url")), "error_code": code, "error_message": _message(code)}
+    if given_url or not result.get("sample_links", True):
+        tried = "the link"
+    elif codes.count(code) == len(attempts):
+        tried = f"{len(attempts)} sample link{'s' if len(attempts) != 1 else ''}"
+    else:
+        tried = f"{codes.count(code)} of {len(attempts)} sample links"
     if code == "drm_protected":
         return CheckResult(status="unsupported", summary="The video is DRM-protected. Lumora never circumvents DRM.",
                            **base)
@@ -110,6 +136,18 @@ def interpret(result: dict[str, Any], *, given_url: str | None, seconds: float) 
     return CheckResult(status="requires_review", summary=(
         f"Reading {tried} failed: {_message(code)} Try again later or with another link."
     ), **base)
+
+
+def previous_link(platform: Platform) -> str | None:
+    """The link the last check of this platform used, if it still belongs to the platform."""
+    link = platform.check.url if platform.check is not None else None
+    if not link:
+        return None
+    try:
+        host = (urlsplit(link).hostname or "").lower()
+    except ValueError:
+        return None
+    return link if host and platform.matches(host) else None
 
 
 # Checks that may wait for their turn at once: enough for every platform on the list.
@@ -158,6 +196,9 @@ class CompatibilityChecker:
         started = time.monotonic()
         self._serial += 1
         directory = self._storage.create("analyses", f"check-{self._serial:06d}-{int(time.time())}")
+        # Without a link the worker tries the integration's sample links. Where there
+        # are none, the link of the previous check is the best thing to test again.
+        previous = previous_link(platform) if url is None else None
         try:
             async with self._slots:
                 started = time.monotonic()  # time spent waiting for a turn is not part of the check
@@ -165,18 +206,21 @@ class CompatibilityChecker:
                     {
                         "task": "compat", "work_dir": str(directory), "ffmpeg_path": self._ffmpeg_path,
                         "limits": worker_limits(self._settings), "url": url, "domains": list(platform.domains),
+                        "fallback_url": previous,
                         "exempt": [list(pair) for pair in self._settings.unsafe_allow_pairs],
                         "nice": self._settings.worker_nice,
                     },
                     timeout=self._settings.admin_check_timeout_seconds, timeout_code="source_timeout",
                 )
-            check = interpret(result, given_url=url, seconds=time.monotonic() - started)
+            check = interpret(
+                result, given_url=url, seconds=time.monotonic() - started, catalogued=platform.builtin,
+            )
         except AppError as exc:
             log.info("compatibility check failed platform=%s code=%s detail=%s",
                      platform.id, exc.code, (exc.detail or "")[:300])
             check = CheckResult(
                 at=time.time(), status="requires_review", url=url, error_code=exc.code, error_message=exc.message,
-                seconds=round(time.monotonic() - started, 1),
+                seconds=round(time.monotonic() - started, 1), conclusive=False,
                 summary=f"The check could not be completed: {exc.message} Try again later.",
             )
         except asyncio.CancelledError:
@@ -184,7 +228,7 @@ class CompatibilityChecker:
             raise
         except Exception:
             log.exception("compatibility check crashed platform=%s", platform.id)
-            check = CheckResult(at=time.time(), status="requires_review",
+            check = CheckResult(at=time.time(), status="requires_review", conclusive=False,
                                 summary="The check failed unexpectedly. See the server log.")
         finally:
             self._storage.remove(directory)

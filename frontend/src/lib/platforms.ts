@@ -15,9 +15,9 @@ export interface Platform {
   status: PlatformStatus
   /** Links from this platform are accepted right now. */
   enabled: boolean
-  /** A compatibility check on this server read a public video from this platform. */
+  /** The last compatibility check on this server read a public video from this platform. */
   verified?: boolean
-  /** When that check ran (Unix seconds). */
+  /** When the last check that tested a link ran (Unix seconds). With `verified` false, it did not get a video. */
   checked_at?: number | null
   note: string | null
   region: string
@@ -103,8 +103,7 @@ export function platformsFromDomains(mode: PlatformList['mode'], domains: readon
       domains: [domain],
       status: 'supported',
       enabled: true,
-      verified: false,
-      checked_at: null,
+      // no `verified`: such an API has no compatibility checks, so there is nothing to say about them
       note: null,
       region: 'open',
     })),

@@ -32,7 +32,8 @@ services:
       - key: CLIENT_IP_HEADER
         value: CF-Connecting-IP
 
-      # Which sources are served. See "Source policy" in the README before changing this.
+      # Which sources are served. See "Platforms and source policy" in the README
+      # before changing this.
       - key: SOURCE_POLICY
         value: platforms
 
@@ -51,6 +52,13 @@ services:
         value: "128"
       - key: FILE_TTL_SECONDS
         value: "900"
+
+      # The admin panel (see "Admin panel" in the README) is off until both of these
+      # are set. Add them in the Render dashboard, not here: this file is public.
+      # A free instance has no disk that survives a restart, so the account starts
+      # from the initial password again each time. A paid instance with a disk
+      # mounted at /srv/data keeps it.
+      #   ADMIN_EMAIL, ADMIN_BOOTSTRAP_PASSWORD
 
       - key: ENABLE_DOCS
         value: "false"

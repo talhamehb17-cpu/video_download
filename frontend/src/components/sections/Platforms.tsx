@@ -23,9 +23,13 @@ function isWorking(platform: Platform): boolean {
   return platform.enabled && platform.status !== 'unsupported'
 }
 
-function checkedOn(platform: Platform): string | null {
-  if (!platform.verified || !platform.checked_at) return null
-  return new Date(platform.checked_at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+/** What the last compatibility check on the server saw. Only a check that tested a link counts. */
+function lastCheck(platform: Platform): { text: string; tone: string; worked: boolean } {
+  if (!platform.checked_at) return { text: 'Not checked on this server yet', tone: 'text-ink-mute', worked: false }
+  const day = new Date(platform.checked_at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+  return platform.verified
+    ? { text: `Worked from this server on ${day}`, tone: 'text-ok', worked: true }
+    : { text: `Didn’t work from this server on ${day}`, tone: 'text-warn', worked: false }
 }
 
 function PlatformCard({ platform }: { platform: Platform }) {
@@ -34,7 +38,7 @@ function PlatformCard({ platform }: { platform: Platform }) {
   const status: PlatformStatus = working ? platform.status : 'unsupported'
   const { badge, Icon } = TONE[status]
   const off = !platform.enabled && platform.status !== 'unsupported'
-  const checked = checkedOn(platform)
+  const check = lastCheck(platform)
   return (
     <div className="glass flex h-full flex-col rounded-2xl p-4 text-left transition-[transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-line-strong">
       <div className="flex items-start justify-between gap-3">
@@ -52,10 +56,11 @@ function PlatformCard({ platform }: { platform: Platform }) {
           {off ? 'The operator of this service has switched this platform off.' : platform.note}
         </p>
       )}
-      {working && (
-        <p className={cn('mt-auto flex items-center gap-1.5 pt-3 text-[11px]', checked ? 'text-ok' : 'text-ink-mute')}>
-          {checked && <BadgeCheck className="size-3" aria-hidden />}
-          {checked ? `Worked from this server on ${checked}` : 'Not checked on this server yet'}
+      {working && platform.verified !== undefined && (
+        <p className={cn('mt-auto flex items-center gap-1.5 pt-3 text-[11px]', check.tone)} data-check={check.worked ? 'worked' : platform.checked_at ? 'failed' : 'none'}>
+          {check.worked && <BadgeCheck className="size-3" aria-hidden />}
+          {!check.worked && platform.checked_at != null && <CircleAlert className="size-3" aria-hidden />}
+          {check.text}
         </p>
       )}
     </div>
@@ -101,7 +106,12 @@ export function Platforms({ list }: { list: PlatformList | null }) {
       ) : (
         <Reveal className="mt-12">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div role="group" aria-label="Which platforms to show" className="glass inline-flex self-start rounded-full p-1">
+            {/* With nothing in the second group there is nothing to choose between. */}
+            <div
+              role="group"
+              aria-label="Which platforms to show"
+              className={cn('glass inline-flex self-start rounded-full p-1', unsupported.length === 0 && 'hidden')}
+            >
               {groups.map((item) => (
                 <button
                   key={item.id}

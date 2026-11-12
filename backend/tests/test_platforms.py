@@ -183,14 +183,45 @@ def test_status_follows_checks_but_respects_known_limits() -> None:
     assert dailymotion.status == "requires_review" and dailymotion.active, "it stays on until the admin decides"
 
 
+def test_a_check_that_learned_nothing_changes_no_status() -> None:
+    registry = PlatformRegistry(None)
+    nasa, dailymotion = registry.get("nasa"), registry.get("dailymotion")
+    assert nasa is not None and dailymotion is not None
+    nothing = CheckResult(at=3.0, status="requires_review", summary="no link to test", conclusive=False)
+    registry.set_check(nasa, nothing)
+    registry.set_check(dailymotion, nothing)
+    assert nasa.status == "partial" and dailymotion.status == "supported", "the catalog's expectation stays"
+    assert nasa.check is nothing and nasa.active, "the administrator still sees what happened"
+    site = registry.add("videos.example.org")
+    registry.set_check(site, nothing)
+    assert site.status == "requires_review" and not site.enabled
+
+
+def test_sample_links_are_the_platforms_own_ordinary_pages() -> None:
+    from urllib.parse import urlsplit
+
+    from app.worker.tasks import MAX_SAMPLE_LINKS, find_integrations
+
+    names, samples = find_integrations(["archive.org"], None)
+    assert names and 1 <= len(samples) <= MAX_SAMPLE_LINKS
+    hosts = [urlsplit(link).hostname or "" for link in samples]
+    assert all(host_matches(host, "archive.org") for host in hosts)
+    assert hosts[0].removeprefix("www.") == "archive.org", "the website's own address before its sub-domains"
+    assert len(set(samples)) == len(samples)
+    # a website nobody wrote an integration for has nothing to test with
+    assert find_integrations(["no-integration.invalid"], None) == ([], [])
+
+
 # ------------------------------------------------------------------------ check results
 def _attempt(**values: Any) -> dict[str, Any]:
     return {"url": "https://videos.example.org/1", **values}
 
 
 def test_check_results_are_interpreted() -> None:
-    def state(result: dict[str, Any], url: str | None = "https://videos.example.org/1") -> CheckResult:
-        return interpret(result, given_url=url, seconds=1.2)
+    def state(
+        result: dict[str, Any], url: str | None = "https://videos.example.org/1", catalogued: bool = False
+    ) -> CheckResult:
+        return interpret(result, given_url=url, seconds=1.2, catalogued=catalogued)
 
     good = state({"integrations": ["vimeo"], "attempts": [
         _attempt(ok=True, extractor="Vimeo", streams=6, video=5, audio=1, max_height=1080, subtitles=2, title="T"),
@@ -204,7 +235,11 @@ def test_check_results_are_interpreted() -> None:
     for reader in ("Generic", "HTML5MediaEmbed", "Vimeo"):  # the last one: a player embedded from elsewhere
         generic = state({"integrations": [], "attempts": [_attempt(ok=True, extractor=reader, streams=1, video=1)]})
         assert (generic.status, generic.method, generic.extractor) == ("requires_review", "generic", None)
-        assert "allows" in generic.summary
+        assert "allows" in generic.summary and generic.conclusive
+        # a platform of the catalog was already approved by a person: reading a video is what counts
+        listed = state({"integrations": [], "attempts": [_attempt(ok=True, extractor=reader, streams=1, video=1)]},
+                       catalogued=True)
+        assert (listed.status, listed.method, listed.qualities) == ("partial", "generic", 1) and listed.conclusive
 
     nothing = state({"integrations": [], "attempts": [_attempt(ok=False, code="unsupported_source")]})
     assert nothing.status == "unsupported" and nothing.error_code == "unsupported_source"
@@ -220,11 +255,31 @@ def test_check_results_are_interpreted() -> None:
     samples = state({"integrations": ["s"], "attempts": [
         _attempt(ok=False, code="not_found"), _attempt(ok=False, code="not_found"),
     ]}, url=None)
-    assert samples.status == "requires_review" and "2 sample links" in samples.summary
+    assert samples.status == "requires_review" and "2 sample links" in samples.summary and samples.conclusive
+    again = state({"integrations": [], "sample_links": False, "attempts": [_attempt(ok=False, code="not_found")]},
+                  url=None)
+    assert "behind the link" in again.summary, "the link of an earlier check is not called a sample link"
+    # sample links that ended differently: what happened to most of them is reported, and counted honestly
+    mixed = state({"integrations": ["s"], "attempts": [
+        _attempt(ok=False, code="not_found"),
+        {"url": "https://videos.example.org/2", "ok": False, "code": "login_required"},
+        {"url": "https://videos.example.org/3", "ok": False, "code": "login_required"},
+    ]}, url=None)
+    assert mixed.error_code == "login_required" and mixed.url == "https://videos.example.org/2"
+    assert "2 of 3 sample links" in mixed.summary and "turned this server away" in mixed.summary
+    tie = state({"integrations": ["s"], "attempts": [
+        _attempt(ok=False, code="source_unreachable"), _attempt(ok=False, code="login_required"),
+    ]}, url=None)
+    assert tie.error_code == "source_unreachable" and "1 of 2 sample links" in tie.summary
 
-    assert state({"integrations": ["s"], "attempts": []}, url=None).status == "requires_review"
+    # nothing was tested: nothing was learned
+    untested = state({"integrations": ["s"], "attempts": []}, url=None)
+    assert untested.status == "requires_review" and not untested.conclusive
     unknown = state({"integrations": [], "attempts": []}, url=None)
     assert unknown.status == "requires_review" and unknown.method == "none" and "Paste a link" in unknown.summary
+    assert not unknown.conclusive
+    listed = state({"integrations": [], "attempts": []}, url=None, catalogued=True)
+    assert not listed.conclusive and "no sample links" in listed.summary
     # no upstream text ever reaches the summary
     odd = state({"integrations": ["s"], "attempts": [_attempt(ok=False, code="extraction_failed", detail="<b>x</b>")]})
     assert "<b>" not in odd.summary and odd.error_message

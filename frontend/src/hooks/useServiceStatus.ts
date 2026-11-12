@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { API_CONFIGURED, api, type ServiceConfig } from '../lib/api'
-import { platformsFromDomains, type PlatformList } from '../lib/platforms'
+import { API_CONFIGURED, api, isAbort, type ServiceConfig } from '../lib/api'
+import type { PlatformList } from '../lib/platforms'
 import { probeService } from '../lib/serviceProbe'
 
 export type ServiceState =
   | { status: 'checking'; config: null }
   | { status: 'waking'; config: null; attempt: number }
-  | { status: 'online'; config: ServiceConfig; platforms: PlatformList }
+  /** `platforms` is null only when the service has a platform list but it could not be fetched. */
+  | { status: 'online'; config: ServiceConfig; platforms: PlatformList | null }
   | { status: 'offline'; config: null; reason: 'unreachable' | 'not_configured' }
 
 /**
@@ -32,13 +33,14 @@ export function useServiceStatus(): {
       (signal) => api.config(signal),
       (event) => {
         if (event.status === 'online') {
-          // The site is usable as soon as the configuration is known; the platform
-          // list replaces this first guess when it arrives.
+          // The page speaks about platforms as soon as it is online, so the list is
+          // fetched first: showing a guess for a moment would put wrong numbers on screen.
           const config = event.config
-          setState({ status: 'online', config, platforms: platformsFromDomains(config.sources.mode, config.sources.domains) })
           api.platforms(config, lists.signal).then(
             (platforms) => setState({ status: 'online', config, platforms }),
-            () => undefined,
+            (error: unknown) => {
+              if (!isAbort(error)) setState({ status: 'online', config, platforms: null })
+            },
           )
         }
         else if (event.status === 'waking') setState({ status: 'waking', config: null, attempt: event.attempt })

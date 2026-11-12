@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
 """Live smoke test against real public sources (needs open internet access).
 
-Runs the real application in-process with its default configuration (allow-list
-policy, public-network rule fully enforced) and, for each sample link:
+Runs the real application in-process with its default configuration (platform
+list, public-network rule fully enforced) and, for each sample link:
 
     analyze -> list qualities/subtitles -> download the smallest quality
             -> fetch one subtitle track (when the source has any)
 
-The sample links are openly licensed films on sources from the default allow list.
+The sample links are openly licensed films on the Internet Archive and Wikimedia
+Commons. These must work: a failure fails the run.
 
     python scripts/live_smoke.py
     python scripts/live_smoke.py https://archive.org/details/SomeItem
+
+With ``--survey`` it then signs in as the administrator of that in-process
+application and runs the same compatibility check the admin panel offers
+("Check everything that is switched on") for every platform on the list. A check
+reads one public video per platform and downloads nothing. The outcome says what
+worked from the machine this ran on, on that day. It never fails the run: many
+platforms turn away data-centre addresses, and that is a fact to report, not a bug.
+
+    python scripts/live_smoke.py --survey
 """
 
 from __future__ import annotations
@@ -33,6 +43,10 @@ from app.main import create_app  # noqa: E402
 from app.presenters import EXAMPLES  # noqa: E402
 
 MAX_DOWNLOAD_BYTES = 400 * 1024 * 1024
+SURVEY_MINUTES = 25
+ADMIN_EMAIL = "survey@example.org"
+ADMIN_FIRST = "survey-initial-password"
+ADMIN_PASSWORD = "survey only passphrase 2026"
 
 
 async def check(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
@@ -90,23 +104,139 @@ async def check(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
     return row
 
 
-async def main() -> list[dict[str, Any]]:
-    urls = sys.argv[1:] or [example.url for example in EXAMPLES]
+async def survey(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Check every platform that is switched on, the way the admin panel does. Returns one row per platform."""
+    signed_in = await client.post("/api/v1/admin/login", json={"email": ADMIN_EMAIL, "password": ADMIN_FIRST})
+    signed_in.raise_for_status()
+    changed = await client.post(
+        "/api/v1/admin/password", headers={"Authorization": f"Bearer {signed_in.json()['token']}"},
+        json={"current_password": ADMIN_FIRST, "new_password": ADMIN_PASSWORD},
+    )
+    changed.raise_for_status()
+    headers = {"Authorization": f"Bearer {changed.json()['token']}"}
+
+    queued = await client.post("/api/v1/admin/platform-checks", headers=headers)
+    queued.raise_for_status()
+    print(f"survey: {queued.json()['started']} checks queued, two at a time", flush=True)
+    deadline = time.monotonic() + SURVEY_MINUTES * 60
+    platforms: list[dict[str, Any]] = []
+    reported: set[str] = set()
+    while True:
+        platforms = (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"]
+        for platform in platforms:
+            check_ = platform["check"]
+            if check_ and not platform["checking"] and platform["id"] not in reported:
+                reported.add(platform["id"])
+                detail = check_["error_code"] or check_["extractor"] or check_["method"]
+                print(f"survey: {platform['name']}: {OUTCOMES[outcome(platform)]} ({detail}, {check_['seconds']} s)",
+                      flush=True)
+        if not any(platform["checking"] for platform in platforms) or time.monotonic() > deadline:
+            break
+        await asyncio.sleep(5)
+    return [platform for platform in platforms if platform["active"] or platform["check"]]
+
+
+OUTCOMES = {
+    "read": "read a public video",
+    "refused": "turned away, or the sample links failed",
+    "untested": "nothing to test with",
+    "unsupported": "unsupported",
+    "unfinished": "not finished",
+}
+
+
+def outcome(platform: dict[str, Any]) -> str:
+    """What the check of one platform observed, as a key of OUTCOMES."""
+    result = platform["check"]
+    if platform["checking"] or not result:
+        return "unfinished"
+    if not result.get("conclusive", True):
+        return "untested"
+    if result["qualities"] and not result["error_code"]:
+        return "read"
+    return "unsupported" if platform["status"] == "unsupported" else "refused"
+
+
+def survey_report(platforms: list[dict[str, Any]]) -> None:
+    """Print the survey: a table for the run summary, and one annotation per outcome."""
+    def facts(platform: dict[str, Any]) -> str:
+        result = platform["check"]
+        kind = outcome(platform)
+        if kind in ("unfinished", "untested"):
+            return OUTCOMES[kind]
+        if result["error_code"]:
+            return str(result["error_code"])
+        if not result["qualities"]:
+            return "no video"
+        parts = [f"{result['max_height']}p" if result["max_height"] else "audio", f"{result['qualities']} qualities"]
+        if result["subtitles"]:
+            parts.append(f"{result['subtitles']} subtitle languages")
+        if result["method"] == "generic":
+            parts.append("generic reader")
+        parts.append(f"{result['seconds']} s")
+        return ", ".join(parts)
+
+    groups: dict[str, list[dict[str, Any]]] = {key: [] for key in OUTCOMES}
+    for platform in platforms:
+        groups[outcome(platform)].append(platform)
+
+    order = list(OUTCOMES)
+    lines = ["| Platform | Outcome | Status after the check | What the check saw |", "| --- | --- | --- | --- |"]
+    for platform in sorted(platforms, key=lambda p: (order.index(outcome(p)), p["name"].lower())):
+        summary = (platform["check"] or {}).get("summary") or "The check did not finish in time."
+        cells = (platform["name"], OUTCOMES[outcome(platform)], platform["status"], f"{facts(platform)}: {summary}")
+        lines.append(f"| {' | '.join(cells)} |")
+    table = "\n".join(lines)
+    # "Read a public video" is the fact. The status adds what the catalog knows about limits.
+    headline = (
+        f"{len(groups['read'])} of {len(platforms)} platforms gave a public video to this machine without signing in; "
+        f"{len(groups['refused'])} turned it away or their sample links failed, "
+        f"{len(groups['untested'])} had nothing to test with, "
+        f"{len(groups['unsupported'])} unsupported, {len(groups['unfinished'])} not finished"
+    )
+    print(f"\nPlatform survey: {headline}\n{table}")
+
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::notice title=Platform survey from this runner::{headline}")
+        for key, members in groups.items():
+            if not members:
+                continue
+            text = "; ".join(f"{p['name']} ({facts(p)})" for p in sorted(members, key=lambda p: p["name"].lower()))
+            text = text.replace("%", "%25").replace("\r", " ").replace("\n", " ")
+            # An annotation holds a limited amount of text: split long lists.
+            chunks = [text[i:i + 1700] for i in range(0, len(text), 1700)]
+            for index, chunk in enumerate(chunks, start=1):
+                part = f" {index}/{len(chunks)}" if len(chunks) > 1 else ""
+                print(f"::notice title=Platform survey - {OUTCOMES[key]}{part} - {len(members)}::{chunk}")
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_file:
+        with Path(summary_file).open("a", encoding="utf-8") as handle:
+            handle.write(f"## Platform survey from this runner\n\n{headline}\n\n{table}\n")
+
+
+async def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+    arguments = sys.argv[1:]
+    with_survey = "--survey" in arguments
+    urls = [argument for argument in arguments if not argument.startswith("--")]
+    urls = urls or [example.url for example in EXAMPLES]
     with tempfile.TemporaryDirectory(prefix="lumora-smoke-") as tmp:
         settings = Settings(
-            _env_file=None, environment="test", storage_dir=Path(tmp) / "storage", rate_limit_enabled=False,
-            log_level="WARNING", max_file_size_mb=1024, min_free_disk_mb=0, job_timeout_seconds=900,
-            analyze_timeout_seconds=90,
+            _env_file=None, environment="test", storage_dir=Path(tmp) / "storage", data_dir=Path(tmp) / "data",
+            rate_limit_enabled=False, log_level="WARNING", max_file_size_mb=1024, min_free_disk_mb=0,
+            job_timeout_seconds=900, analyze_timeout_seconds=90,
+            admin_email=ADMIN_EMAIL if with_survey else None,
+            admin_bootstrap_password=ADMIN_FIRST if with_survey else None,
         )
         app = create_app(settings)
         transport = httpx.ASGITransport(app=app)
         api = httpx.AsyncClient(transport=transport, base_url="http://api.local", timeout=1200)
         async with app.router.lifespan_context(app), api as client:
             config = (await client.get("/api/v1/config")).json()
-            print(f"policy={config['sources']['mode']} domains={config['sources']['domains']}")
+            print(f"policy={config['sources']['mode']} domains={len(config['sources']['domains'])}", flush=True)
             rows = [await check(client, url) for url in urls]
+            platforms = await survey(client) if with_survey else None
 
-    return rows
+    return rows, platforms
 
 
 def report(rows: list[dict[str, Any]]) -> int:
@@ -132,4 +262,8 @@ def report(rows: list[dict[str, Any]]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(report(asyncio.run(main())))
+    smoke_rows, surveyed = asyncio.run(main())
+    exit_code = report(smoke_rows)
+    if surveyed is not None:
+        survey_report(surveyed)
+    raise SystemExit(exit_code)

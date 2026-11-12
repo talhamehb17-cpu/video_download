@@ -600,8 +600,9 @@ def find_integrations(domains: list[str], url: str | None) -> tuple[list[str], l
     """
     from yt_dlp.extractor import gen_extractor_classes
 
+    own = {domain.removeprefix("www.") for domain in domains}
     names: list[str] = []
-    samples: list[tuple[int, str]] = []
+    found: list[tuple[int, list[tuple[int, str]]]] = []  # per extractor: number of tests, [(rank, link)]
     for extractor in gen_extractor_classes():
         if extractor.ie_key() == "Generic":
             continue
@@ -610,6 +611,7 @@ def find_integrations(domains: list[str], url: str | None) -> tuple[list[str], l
         except Exception:  # one broken extractor must not hide the others
             tests = []
         hit = False
+        links: list[tuple[int, str]] = []
         for test in tests:
             test_url = test.get("url")
             if not isinstance(test_url, str):
@@ -622,7 +624,8 @@ def find_integrations(domains: list[str], url: str | None) -> tuple[list[str], l
                 continue
             hit = True
             if _sample_worthy(test):
-                samples.append((len(tests), test_url))
+                # The website's own address before its sub-domains (players, archives, mobile sites).
+                links.append((0 if host.removeprefix("www.") in own else 1, test_url))
         if not hit and url is not None:
             try:
                 hit = bool(extractor.suitable(url))
@@ -630,9 +633,17 @@ def find_integrations(domains: list[str], url: str | None) -> tuple[list[str], l
                 hit = False
         if hit:
             names.append(str(extractor.IE_NAME))
-    # Links of the extractor with the most tests first: that is the main one.
-    ordered = list(dict.fromkeys(link for _, link in sorted(samples, key=lambda item: -item[0])))
-    return sorted(set(names))[:12], ordered[:MAX_SAMPLE_LINKS]
+        if links:
+            found.append((len(tests), sorted(links, key=lambda item: item[0])))
+    # The main integration is the one with the most tests among those for the
+    # website's own address. Two of its links come first; then one link of each
+    # other integration, so that a third attempt covers a different kind of page.
+    found.sort(key=lambda item: (item[1][0][0], -item[0]))
+    ordered: list[str] = []
+    if found:
+        main = [link for _rank, link in found[0][1]]
+        ordered = main[:2] + [links[0][1] for _size, links in found[1:]] + main[2:]
+    return sorted(set(names))[:12], list(dict.fromkeys(ordered))[:MAX_SAMPLE_LINKS]
 
 
 def _try_link(task: dict[str, Any], url: str) -> dict[str, Any]:
@@ -678,9 +689,12 @@ def _try_link(task: dict[str, Any], url: str) -> dict[str, Any]:
 def compat(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
     """Check what this server can do with a website: is there an integration, does a link work?"""
     url = task.get("url") if isinstance(task.get("url"), str) else None
+    fallback = task.get("fallback_url") if isinstance(task.get("fallback_url"), str) else None
     integrations, samples = find_integrations([str(d) for d in task.get("domains") or []], url)
     attempts: list[dict[str, Any]] = []
-    for link in ([url] if url else samples):
+    # A link the administrator gave; else the integration's own sample links; else
+    # the link that an earlier check of this website used.
+    for link in ([url] if url else samples or ([fallback] if fallback else [])):
         attempts.append(_try_link(task, link))
         if attempts[-1]["ok"]:
             break

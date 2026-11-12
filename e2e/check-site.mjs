@@ -3,9 +3,12 @@
  * End-to-end check of a deployed Lumora website, in a real browser.
  *
  * Opens the site the way a visitor does and waits for the download service to
- * come online. Then, for each example link the service offers (or each --link):
- * analyzes it, picks the smallest quality, saves a subtitle track, has the file
- * prepared, saves it through the browser and deletes it from the server again.
+ * come online. It then checks that links the service does not take are declined
+ * in words, and, for each example link the service offers (or each --link):
+ * that the platform is recognised while typing, then analyzes it, picks the
+ * smallest quality, saves a subtitle track, has the file prepared, saves it
+ * through the browser and deletes it from the server again. Last, it opens the
+ * administrator's page without signing in and reports what it shows.
  * Nothing is mocked: every step goes through the site's security headers, the
  * API's cross-origin rules and the real sources.
  *
@@ -35,8 +38,12 @@ const ANALYZE_TIMEOUT = 120_000
 const SUBTITLE_TIMEOUT = 120_000
 const JOB_TIMEOUT = 15 * 60_000
 const SAVE_TIMEOUT = 10 * 60_000
-/** A link no source policy with an allow list accepts. It is never fetched. */
-const OUTSIDE_LINK = 'https://example.com/watch?v=lumora-check'
+/** A link to a website that is on no list. It is never fetched. */
+const OUTSIDE_LINK = 'https://videos.example.com/watch?v=lumora-check'
+/** A service protected with DRM: declined by name wherever the platform list exists. Never fetched. */
+const DRM_LINK = 'https://www.netflix.com/watch/80192098'
+/** The administrator's page. Not linked from anywhere; opened here without signing in. */
+const ADMIN_PATH = '/devzardhft'
 
 const USAGE = `Usage: node check-site.mjs <site address> [--link <url>]... [--max-mb <n>] [--out <dir>]
 
@@ -174,14 +181,24 @@ async function clickText(page, selector, text, { exact = false } = {}) {
   await element.dispose()
 }
 
-async function enterLink(page, link) {
+/** Types the link and returns what the site says about it under the field ("YouTube detected · …"), if anything. */
+async function typeLink(page, link) {
   await page.$eval('input[name=url]', (input) => {
     input.focus()
     input.select()
   })
   await page.keyboard.press('Backspace')
   await page.keyboard.type(link)
+  const hint = await page.waitForSelector('[data-detected]', { timeout: 2500 }).catch(() => null)
+  if (!hint) return null
+  await sleep(300) // the hint fades from the previous link's text to this one's
+  return page.$eval('[data-detected]', (node) => ({ id: node.getAttribute('data-detected'), text: node.textContent.replace(/\s+/g, ' ').trim() })).catch(() => null)
+}
+
+async function enterLink(page, link) {
+  const hint = await typeLink(page, link)
   await page.keyboard.press('Enter')
+  return hint
 }
 
 /** The next answer of the API to `method /api/v1<suffix>`, or null when none arrives. */
@@ -194,23 +211,26 @@ function nextAnswer(page, method, suffix, timeout) {
     .catch(() => null)
 }
 
-/** Sends the link and returns the API's answer; fails early when the page reports a network error. */
+/**
+ * Sends the link and returns the API's answer, plus what the site said about the link
+ * while it was typed. Fails early when the page reports a problem without asking the API.
+ */
 async function analyze(page, link) {
   const answer = nextAnswer(page, 'POST', '/analyze', ANALYZE_TIMEOUT)
   const alert = page.waitForSelector('#download [role=alert]', { timeout: ANALYZE_TIMEOUT }).then(
     () => 'alert',
     () => null,
   )
-  await enterLink(page, link)
+  const hint = await enterLink(page, link)
   const first = await Promise.race([answer, alert])
   if (first === 'alert') {
     // The page gave up without an answer from the API: let a just-arriving answer win, else report the page's words.
     const late = await Promise.race([answer, sleep(1500).then(() => null)])
     if (!late) throw new Error(`the page reported: ${await areaText(page)}`)
-    return { status: late.status(), body: await late.json().catch(() => null) }
+    return { status: late.status(), body: await late.json().catch(() => null), hint }
   }
   if (!first) throw new Error(`no answer from the API within ${ANALYZE_TIMEOUT / 1000} s`)
-  return { status: first.status(), body: await first.json().catch(() => null) }
+  return { status: first.status(), body: await first.json().catch(() => null), hint }
 }
 
 const cleared = (page) => page.waitForFunction(() => !document.querySelector('#download')?.firstElementChild, { timeout: 10_000 })
@@ -254,7 +274,19 @@ async function checkService(ctx) {
   if (!ctx.config) return ctx.fail('Service', 'the site says it is online, but no configuration answer was seen')
 
   const { config } = ctx
-  const policy = config.sources.mode === 'allowlist' ? `${config.sources.domains.length} sources on the allow list` : 'every supported source'
+  for (let waited = 0; config.capabilities.platform_list && !ctx.platforms && waited < 5000; waited += 100) await sleep(100)
+  // What the administrator's compatibility checks on that server saw, as the site tells its visitors.
+  const enabled = ctx.platforms?.platforms.filter((platform) => platform.enabled) ?? []
+  const worked = enabled.filter((platform) => platform.verified).length
+  const refused = enabled.filter((platform) => !platform.verified && platform.checked_at).length
+  let policy = 'every supported source'
+  if (config.sources.mode === 'allowlist') policy = `${config.sources.domains.length} sources on the allow list`
+  else if (config.sources.mode === 'platforms') {
+    policy =
+      `${ctx.platforms ? enabled.length : '?'} platforms switched on ` +
+      `(checked on that server: ${worked} gave a video, ${refused} did not, ${enabled.length - worked - refused} not checked)`
+  }
+  if (!config.capabilities.platform_list) policy += ', no platform list (an API from before version 1.1)'
   const direct = await describeApi(ctx.apiOrigin, site.origin).catch((error) => `asking it directly failed: ${error.message}`)
   // The name of the main script changes with every build of the site, so it tells deployments apart.
   const build = await page.$eval('script[type=module][src]', (script) => script.src.split('/').pop().replace(/\.js$/, '')).catch(() => 'unknown')
@@ -281,18 +313,100 @@ async function describeApi(apiOrigin, siteOrigin) {
   return `${parts.join(', ')}.`
 }
 
-/** With an allow list, a link from elsewhere must be declined, in words, without a pointless "Try again". */
-async function checkRefusal(ctx) {
+/** How the API itself answers a link, asked directly as the site's origin. */
+async function askApi(ctx, link) {
+  const response = await fetch(`${ctx.apiOrigin}/api/v1/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: ctx.site.origin },
+    body: JSON.stringify({ url: link }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  const body = await response.json().catch(() => null)
+  return { status: response.status, code: body?.error?.code ?? null }
+}
+
+/**
+ * A link the service does not take must be declined in words, without a pointless
+ * "Try again". With a platform list the site answers at once from that list, without
+ * sending the link; the API is then asked directly, to see that it would say the same.
+ */
+async function checkRefusal(ctx, { step, link, code, words }) {
   const { page } = ctx
-  const { status, body } = await analyze(page, OUTSIDE_LINK)
-  await page.waitForSelector('#download [role=alert]', { timeout: 15_000 })
+  const sentBefore = ctx.analyzeRequests
+  const hint = await enterLink(page, link)
+  await page.waitForSelector('#download [role=alert]', { timeout: 30_000 })
+  await sleep(1200) // a just-arriving answer of the API, if the link was sent
   const shown = squash(await page.$eval('#download [role=alert] p', (node) => node.textContent))
   const retry = await page.$$eval('#download button', (buttons) => buttons.some((button) => button.textContent.includes('Try again')))
-  const declined = status === 422 && body?.error?.code === 'domain_not_allowed'
-  const details = `${OUTSIDE_LINK} -> "${shown}" (${body?.error?.code ?? `HTTP ${status}`})${retry ? ', but "Try again" is offered' : ', no "Try again" offered'}`
-  if (declined && !retry) ctx.pass('Link outside the allow list', details)
-  else ctx.fail('Link outside the allow list', details)
+  const sent = ctx.analyzeRequests > sentBefore
+  const api = await askApi(ctx, link).catch((error) => ({ status: 0, code: error.message }))
+  const problems = []
+  if (!words.test(shown)) problems.push('the message does not say why')
+  if (retry) problems.push('"Try again" is offered although the answer cannot change')
+  if (api.status !== 422 || api.code !== code) problems.push(`the API itself answers ${api.code ?? `HTTP ${api.status}`} instead of ${code}`)
+  if (ctx.config.sources.mode === 'platforms' && sent) problems.push('the link was sent although the platform list already rules it out')
+  if (ctx.config.sources.mode === 'platforms' && !hint) problems.push('nothing was said about the link while it was typed')
+  const details =
+    `${link} -> "${shown}"${hint ? `; while typing: "${hint.text}"` : ''}; ` +
+    `${sent ? 'answered by the API' : 'answered by the site from the platform list, without sending the link'}; asked directly, the API answers ${api.code} (HTTP ${api.status})`
+  if (problems.length === 0) ctx.pass(step, details)
+  else ctx.fail(step, `${details}. BUT ${problems.join('; ')}`)
   await startOver(page)
+}
+
+/**
+ * The administrator's page, opened without signing in. It must exist, stay out of
+ * search results and off the public pages, and either offer the sign-in form or say
+ * in words why the panel cannot be used yet. No credentials are used here.
+ */
+async function checkAdminPage(ctx) {
+  const step = 'Administrator page'
+  const address = new URL(ADMIN_PATH, ctx.site.origin).href
+  const linked = await ctx.page.$$eval('a[href]', (links, path) => links.some((link) => link.getAttribute('href').includes(path)), ADMIN_PATH)
+  const robots = await fetch(new URL('/robots.txt', ctx.site.origin), { signal: AbortSignal.timeout(20_000) }).then((response) => response.text(), () => '')
+  const header = await fetch(address, { signal: AbortSignal.timeout(20_000) }).then((response) => response.headers.get('x-robots-tag'), () => null)
+
+  const tab = await ctx.page.browser().newPage()
+  const problems = []
+  tab.on('pageerror', (error) => problems.push(`script error: ${String(error).slice(0, 200)}`))
+  tab.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`HTTP ${response.status()} for ${response.request().method()} ${new URL(response.url()).pathname}`)
+  })
+  try {
+    await tab.setViewport({ width: 1366, height: 900 })
+    await tab.goto(address, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+    const shown = await tab
+      .waitForFunction(
+        () => {
+          if (document.querySelector('input[name=email]') && document.querySelector('input[name=password]')) return 'the sign-in form'
+          const heading = document.querySelector('main h1')?.textContent.trim()
+          return heading ? `"${heading}"` : false
+        },
+        { timeout: SERVICE_TIMEOUT },
+      )
+      .then((handle) => handle.jsonValue(), () => null)
+    const meta = await tab.$eval('meta[name=robots]', (node) => node.content).catch(() => null)
+    const publicMenu = (await tab.$('header nav')) !== null
+    const explanation = shown && shown !== 'the sign-in form' ? squash(await tab.$eval('main', (node) => node.textContent)).slice(0, 260) : ''
+    if (ctx.out) await tab.screenshot({ path: path.join(ctx.out, '99-administrator-page.png') }).catch(() => {})
+
+    if (!shown) problems.push('the page showed neither a sign-in form nor an explanation')
+    if (shown && /doesn.t exist/i.test(shown)) problems.push('the address leads to the "page not found" page')
+    if (!meta?.includes('noindex')) problems.push('search engines are not told to skip the page')
+    if (publicMenu) problems.push('the public menu is shown on it')
+    if (linked) problems.push('the public page links to it')
+    if (robots.includes(ADMIN_PATH)) problems.push('robots.txt names it')
+    // An API from before 1.1 has no panel; the page must say so instead of offering a form that cannot work.
+    if (!ctx.config.capabilities.platform_list && shown === 'the sign-in form') problems.push('a sign-in form is shown although the API has no admin panel')
+
+    const details =
+      `${address} shows ${shown ?? 'nothing'}${explanation ? ` (${explanation})` : ''}; no public page links to it, robots.txt does not name it, ` +
+      `robots meta "${meta ?? 'missing'}"${header ? `, X-Robots-Tag "${header}"` : ''}; not signed in, nothing was changed`
+    if (problems.length === 0) ctx.pass(step, details)
+    else ctx.fail(step, `${details}. BUT ${[...new Set(problems)].join('; ')}`)
+  } finally {
+    await tab.close().catch(() => {})
+  }
 }
 
 async function checkLink(ctx, link, label) {
@@ -300,8 +414,8 @@ async function checkLink(ctx, link, label) {
 
   // ------------------------------------------------------------------------- analyze
   let started = Date.now()
-  const { status, body: analysis } = await analyze(page, link)
-  if (status !== 200) return ctx.fail(`${label}: analyze`, apiError(status, analysis))
+  const { status, body: analysis, hint } = await analyze(page, link)
+  if (status !== 200) return ctx.fail(`${label}: analyze`, `${apiError(status, analysis)}${hint ? `; while typing the site said "${hint.text}"` : ''}`)
   await page.waitForSelector('#download fieldset input[type=radio]', { timeout: 20_000 })
   const analyzed = seconds(started)
 
@@ -313,9 +427,14 @@ async function checkLink(ctx, link, label) {
     poster = loaded ? 'poster shown' : 'POSTER NOT SHOWN'
   }
   const qualities = analysis.qualities.map((quality) => `${quality.label} ${quality.container}`).join(', ')
-  const summary = `"${analysis.title}" from ${analysis.source.domain} in ${analyzed}: ${qualities}; ${analysis.subtitles.length} subtitle language(s); ${poster}`
+  const recognised = hint ? `recognised while typing: "${hint.text}"` : 'nothing said about the link while typing'
+  const summary =
+    `"${analysis.title}" from ${analysis.source.platform ?? analysis.source.domain} in ${analyzed}: ${qualities}; ` +
+    `${analysis.subtitles.length} subtitle language(s); ${poster}; ${recognised}`
   await ctx.shot(`${label} result`)
+  const unusable = hint && /can.t be downloaded|switched off|isn.t on the list/.test(hint.text)
   if (poster === 'POSTER NOT SHOWN') ctx.fail(`${label}: analyze`, summary)
+  else if (unusable) ctx.fail(`${label}: analyze`, `${summary}. BUT the site called a working link unusable`)
   else ctx.pass(`${label}: analyze`, summary)
 
   // ------------------------------------------------------------------------ subtitles
@@ -463,6 +582,9 @@ async function main() {
     maxBytes: Number(values['max-mb']) * 1e6,
     apiOrigin: null,
     config: null,
+    platforms: null,
+    analyzeRequests: 0,
+    out: values.out ?? null,
     jobs: new Map(),
     problems: [],
     hosts: new Set(),
@@ -482,7 +604,12 @@ async function main() {
   // The answers to "analyze this link" and "start this download" are read and reported by
   // the steps themselves, so an error answer there is not counted a second time.
   const judgedByStep = (address) => /\/api\/v1\/(analyze|jobs)$/.test(new URL(address).pathname)
-  page.on('request', (request) => { if (request.url().startsWith('http')) ctx.hosts.add(new URL(request.url()).host) })
+  page.on('request', (request) => {
+    if (!request.url().startsWith('http')) return
+    const url = new URL(request.url())
+    ctx.hosts.add(url.host)
+    if (request.method() === 'POST' && url.pathname.endsWith('/api/v1/analyze')) ctx.analyzeRequests += 1
+  })
   page.on('response', async (response) => {
     const url = new URL(response.url())
     const method = response.request().method()
@@ -495,6 +622,7 @@ async function main() {
       ctx.apiOrigin = url.origin
       ctx.config = body
     }
+    if (url.pathname.endsWith('/api/v1/platforms') && status === 200) ctx.platforms = body
     if (/\/api\/v1\/jobs(\/[^/]+)?$/.test(url.pathname) && body.id) ctx.jobs.set(body.id, body)
   })
   page.on('requestfailed', (request) => {
@@ -514,8 +642,19 @@ async function main() {
 
   try {
     if (await checkService(ctx)) {
-      if (ctx.config.sources.mode === 'allowlist') {
-        await checkRefusal(ctx).catch((error) => ctx.fail('Link outside the allow list', error.message))
+      const { mode } = ctx.config.sources
+      if (mode !== 'open') {
+        const refusal = {
+          step: mode === 'allowlist' ? 'Link outside the allow list' : 'Link to an unlisted website',
+          link: OUTSIDE_LINK,
+          code: 'domain_not_allowed',
+          words: /isn.t (a platform this service works with|enabled on this service)/,
+        }
+        await checkRefusal(ctx, refusal).catch((error) => ctx.fail(refusal.step, error.message))
+      }
+      if (ctx.platforms?.platforms.some((platform) => platform.id === 'netflix' && !platform.enabled)) {
+        const refusal = { step: 'Link to a DRM service', link: DRM_LINK, code: 'platform_unsupported', words: /can.t be downloaded/ }
+        await checkRefusal(ctx, refusal).catch((error) => ctx.fail(refusal.step, error.message))
       }
       const examples = ctx.config.sources.examples
       const named = (url) => `${new URL(url).hostname}${new URL(url).pathname}`.replace(/\/$/, '').slice(0, 48)
@@ -535,6 +674,7 @@ async function main() {
           await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent.trim().startsWith('Service online'), { timeout: SERVICE_TIMEOUT }).catch(() => {})
         }
       }
+      await checkAdminPage(ctx).catch((error) => ctx.fail('Administrator page', error.message))
     } else {
       await ctx.shot('service')
     }

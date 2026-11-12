@@ -137,8 +137,8 @@ async def add_platform(
         exempt_host = validated.host if validated.is_exempt else None
     domain = exempt_host or normalise_domain(body.target)
     if domain is None:
-        raise AppError("invalid_url", message="Enter a domain like example.com, or a link to a video page.",
-                       hint="")  # the usual hint ("paste the full address") would contradict the message
+        # An empty hint on purpose: the usual one ("paste the full address") would contradict the message.
+        raise AppError("invalid_url", message="Enter a domain like example.com, or a link to a video page.", hint="")
     if exempt_host is None:
         # Run the address through the same checks as any link (internal names, block list).
         await _validated_link(services, link or f"https://{domain}/")

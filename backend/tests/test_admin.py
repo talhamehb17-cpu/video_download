@@ -222,7 +222,9 @@ async def test_internal_and_malformed_targets_cannot_be_added(make_client: Calla
     assert error["code"] in ("blocked_destination", "invalid_url", "unsupported_scheme")
     if target in ("localhost", "not a domain"):
         # the message asks for a domain or a link; no hint may contradict it
-        assert error == {"code": "invalid_url", "message": "Enter a domain like example.com, or a link to a video page."}
+        assert error == {
+            "code": "invalid_url", "message": "Enter a domain like example.com, or a link to a video page.",
+        }
     assert all(p["builtin"] for p in (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"])
 
 
@@ -263,11 +265,18 @@ async def test_adding_a_website_checks_it_and_leaves_it_off(make_client: Callabl
     on = await client.patch(f"/api/v1/admin/platforms/{platform['id']}", headers=headers, json={"enabled": True})
     assert on.json()["active"] is True
     shown = next(p for p in (await client.get("/api/v1/platforms")).json()["platforms"] if p["id"] == platform["id"])
-    # approved by the administrator, but honest about it: not "supported", and not verified
-    assert shown["enabled"] and shown["status"] == "partial" and shown["verified"] is False and shown["checked_at"]
+    # approved by the administrator, and honest about it: a video was read, but the website is not "supported"
+    assert shown["enabled"] and shown["status"] == "partial" and shown["verified"] is True and shown["checked_at"]
+    assert "no dedicated integration" in shown["note"]
     again = await client.post("/api/v1/admin/platforms", headers=headers, json={"target": f"{source}/watch/webm"})
     assert again.status_code == 200 and again.json()["id"] == platform["id"], "the same website is not added twice"
     await wait_for_check(client, headers, platform["id"])
+
+    # "Check" without a link: this website has no sample links, so the link of the last check is read again
+    repeat = await client.post(f"/api/v1/admin/platforms/{platform['id']}/check", headers=headers, json={})
+    assert repeat.status_code == 202
+    repeated = (await wait_for_check(client, headers, platform["id"]))["check"]
+    assert repeated["url"] == f"{source}/watch/webm" and repeated["qualities"] >= 1 and repeated["conclusive"] is True
 
     # a link that leads nowhere is reported as an error of that check
     failing = await client.post(f"/api/v1/admin/platforms/{platform['id']}/check", headers=headers,
@@ -275,10 +284,38 @@ async def test_adding_a_website_checks_it_and_leaves_it_off(make_client: Callabl
     assert failing.status_code == 202
     failed = (await wait_for_check(client, headers, platform["id"]))["check"]
     assert failed["error_code"] == "not_found" and failed["error_message"] and failed["status"] == "requires_review"
+    shown = next(p for p in (await client.get("/api/v1/platforms")).json()["platforms"] if p["id"] == platform["id"])
+    # visitors learn that the last check did not get a video
+    assert shown["verified"] is False and shown["checked_at"] == failed["at"]
+    assert "last check on this server couldn't read a video" in shown["note"]
 
     assert (await client.delete(f"/api/v1/admin/platforms/{platform['id']}", headers=headers)).status_code == 204
     assert all(p["builtin"] for p in (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"])
     assert not list((client.app.state.services.storage.root / "analyses").iterdir()), "checks clean up"  # type: ignore[attr-defined]
+
+
+async def test_a_check_with_nothing_to_test_is_not_a_finding(make_client: Callable[..., Any]) -> None:
+    client: httpx.AsyncClient = await make_client(**ADMIN)
+    headers = await ready_admin(client)
+    services = client.app.state.services  # type: ignore[attr-defined]
+    site = services.platforms.add("no-integration.invalid", "Nothing to test")
+    started = await client.post(f"/api/v1/admin/platforms/{site.id}/check", headers=headers, json={})
+    assert started.status_code == 202, started.text
+    checked = await wait_for_check(client, headers, site.id)
+    check = checked["check"]
+    assert check["conclusive"] is False and check["url"] is None and check["error_code"] is None
+    assert "Paste a link" in check["summary"]
+    assert checked["status"] == "requires_review" and checked["enabled"] is False
+
+    # the same on a platform of the catalog: its status stays, and visitors are told nothing about a check
+    nasa = services.platforms.get("nasa")
+    services.platforms.set_check(nasa, CheckResult(
+        at=time.time(), status="requires_review", summary="There are no sample links.", conclusive=False))
+    listed = next(p for p in (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"]
+                  if p["id"] == "nasa")
+    assert listed["status"] == "partial" and listed["active"] is True and listed["check"]["conclusive"] is False
+    public = next(p for p in (await client.get("/api/v1/platforms")).json()["platforms"] if p["id"] == "nasa")
+    assert (public["status"], public["verified"], public["checked_at"]) == ("partial", False, None)
 
 
 async def test_checking_every_enabled_platform_at_once(
@@ -295,7 +332,8 @@ async def test_checking_every_enabled_platform_at_once(
         seen.append(platform.id)
         await release.wait()
         services.platforms.set_check(platform, CheckResult(
-            at=time.time(), status="supported", summary="A public video was read.", method="extractor"))
+            at=time.time(), status="supported", summary="A public video was read.", method="extractor",
+            qualities=4, max_height=1080))
 
     monkeypatch.setattr(CompatibilityChecker, "_run", fake_run)
     off = await client.patch("/api/v1/admin/platforms/vimeo", headers=headers, json={"enabled": False})

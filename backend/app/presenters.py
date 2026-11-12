@@ -178,6 +178,8 @@ def health_response(services: Services) -> schemas.HealthResponse:
 
 # ---------------------------------------------------------------------------- platforms
 _UNCONFIRMED = "Not confirmed on this server yet, so links may fail."
+_CHECK_FAILED = "The last check on this server couldn't read a video from this platform, so links may fail."
+_NO_INTEGRATION = "Added by the operator of this service. It has no dedicated integration, so some pages may fail."
 _ALLOWED_BY_OPERATOR = "Enabled by the operator of this service. There is no dedicated integration, so links may fail."
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -204,10 +206,12 @@ def platforms_response(services: Services) -> schemas.PlatformsResponse:
             continue  # websites under review are the administrator's business
         status = platform.status
         note = platform.note
+        # Visitors are told what a check saw only when it tested a link.
+        check = platform.check if platform.check is not None and platform.check.conclusive else None
+        verified = check is not None and check.error_code is None and check.qualities > 0
         if status == "requires_review":
-            status, note = "partial", note or _UNCONFIRMED
-        check = platform.check
-        verified = check is not None and check.error_code is None and check.status in ("supported", "partial")
+            status = "partial"
+            note = note or (_NO_INTEGRATION if verified else _CHECK_FAILED if check else _UNCONFIRMED)
         items.append(schemas.PlatformInfo(
             id=platform.id, name=platform.name, domains=list(platform.domains), status=status,  # type: ignore[arg-type]
             enabled=accepted, verified=verified, checked_at=check.at if check else None, note=note,

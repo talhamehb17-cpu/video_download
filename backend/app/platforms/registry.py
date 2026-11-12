@@ -79,6 +79,9 @@ class CheckResult:
     error_code: str | None = None
     error_message: str | None = None
     seconds: float | None = None
+    # False when the check learned nothing about the website: there was no link to
+    # test, or the check itself broke. Such a result never changes a status.
+    conclusive: bool = True
 
 
 @dataclass
@@ -100,7 +103,7 @@ class Platform:
     def status(self) -> Status:
         if self.declared == "unsupported":
             return "unsupported"
-        if self.check is not None:
+        if self.check is not None and self.check.conclusive:
             # One link that worked does not lift the known limits of a platform.
             if self.check.status == "supported" and self.declared == "partial":
                 return "partial"

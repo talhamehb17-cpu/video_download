@@ -174,8 +174,11 @@ class PlatformInfo(BaseModel):
     domains: list[str] = Field(description="Addresses of the platform. 'name.*' also covers country versions.")
     status: PublicStatus
     enabled: bool = Field(description="Links from this platform are accepted right now.")
-    verified: bool = Field(description="A compatibility check on this server read a public video.")
-    checked_at: float | None = Field(default=None, description="When that check ran (Unix time).")
+    verified: bool = Field(description="The last compatibility check on this server read a public video.")
+    checked_at: float | None = Field(default=None, description=(
+        "When the last compatibility check that tested a link ran (Unix time). "
+        "With verified=false, that check did not get a video."
+    ))
     note: str | None = None
     region: str
 
@@ -244,6 +247,7 @@ class AdminCheck(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     seconds: float | None = None
+    conclusive: bool = Field(default=True, description="False when there was nothing to test or the check broke.")
 
 
 class AdminPlatform(BaseModel):

@@ -37,6 +37,8 @@ export interface AdminCheck {
   error_code: string | null
   error_message: string | null
   seconds: number | null
+  /** False when the check had nothing to test or could not be completed. */
+  conclusive: boolean
 }
 
 export interface AdminPlatform {

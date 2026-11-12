@@ -102,13 +102,67 @@ jobs:
           exit 1
       - name: Check the running container
         run: |
-          grep --quiet '"ffmpeg":true' health.json || { echo "::error title=Container image::FFmpeg is not available in the image"; exit 1; }
-          test "$(docker exec api id -u)" != "0" || { echo "::error title=Container image::the API runs as root"; exit 1; }
-          curl --fail --silent http://127.0.0.1:8000/api/v1/config | grep --quiet '"mode":"allowlist"'
-          # A link outside the allow list is refused, an internal address is blocked.
-          code() { curl --silent --output /dev/null --write-out '%{http_code}' -X POST -H 'Content-Type: application/json' --data "$1" http://127.0.0.1:8000/api/v1/analyze; }
-          test "$(code '{"url":"https://www.youtube.com/watch?v=abc"}')" = "422"
-          test "$(code '{"url":"http://169.254.169.254/latest/meta-data/"}')" = "422"
+          api=http://127.0.0.1:8000
+          fail() { echo "::error title=Container image::$1"; exit 1; }
+          grep --quiet '"ffmpeg":true' health.json || fail "FFmpeg is not available in the image"
+          test "$(docker exec api id -u)" != "0" || fail "the API runs as root"
+          docker exec api test -w /srv/data || fail "the data folder is not writable for the API's user"
+
+          config="$(curl --fail --silent $api/api/v1/config)"
+          test "$(jq -r .version <<<"$config")" = "$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' backend/app/__init__.py)" || fail "the image does not run this commit's code"
+          test "$(jq -r .sources.mode <<<"$config")" = "platforms" || fail "the default source policy is not 'platforms'"
+          test "$(jq -r .capabilities.platform_list <<<"$config")" = "true" || fail "the platform list is not announced"
+          test "$(jq -r .limits.max_file_size_bytes <<<"$config")" = "1610612736" || fail "the default size limit is not 1.5 GB"
+
+          platforms="$(curl --fail --silent $api/api/v1/platforms)"
+          test "$(jq '[.platforms[] | select(.enabled)] | length' <<<"$platforms")" -ge 30 || fail "fewer than 30 platforms are enabled"
+          test "$(jq -r '.platforms[] | select(.id=="netflix") | .enabled' <<<"$platforms")" = "false" || fail "a DRM service is enabled"
+          test "$(jq '[.platforms[] | select(.verified)] | length' <<<"$platforms")" = "0" || fail "a platform claims to be verified before any check ran"
+
+          # Refusals that never leave the container: an unlisted website, a DRM service, an internal address.
+          answer() { curl --silent -X POST -H 'Content-Type: application/json' --data "{\"url\":\"$1\"}" $api/api/v1/analyze | jq -r .error.code; }
+          test "$(answer https://videos.example.org/watch/1)" = "domain_not_allowed" || fail "an unlisted website was not declined"
+          test "$(answer https://www.netflix.com/watch/1)" = "platform_unsupported" || fail "a DRM service was not declined"
+          test "$(answer http://169.254.169.254/latest/meta-data/)" = "blocked_destination" || fail "an internal address was not blocked"
+
+          # Opening the analyze address in a browser tab is a GET: the answer explains itself.
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' $api/api/v1/analyze)" = "405" || fail "GET /analyze is not answered with 405"
+
+          # The admin panel stays off until an administrator is configured.
+          test "$(curl --silent $api/api/v1/admin/status | jq -r .configured)" = "false" || fail "the admin panel is on without configuration"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"email":"owner@example.com","password":"x"}' $api/api/v1/admin/login)" = "503" || fail "signing in is possible without configuration"
+      - name: Administrator account and settings survive a new container
+        run: |
+          api=http://127.0.0.1:8001
+          fail() { echo "::error title=Container image::$1"; docker logs admin-api 2>&1 | tail -n 40; exit 1; }
+          docker volume create lumora-data >/dev/null
+          start() {
+            docker run --detach --name admin-api --publish 8001:8000 --volume lumora-data:/srv/data \
+              --env ADMIN_EMAIL=Owner@Example.com --env ADMIN_BOOTSTRAP_PASSWORD=first-password-123 lumora-api >/dev/null
+            for attempt in $(seq 1 40); do curl --fail --silent $api/health >/dev/null 2>&1 && return 0; sleep 1; done
+            fail "the API did not start"
+          }
+          post() { curl --silent -X POST -H 'Content-Type: application/json' --data "$2" "${@:3}" "$api$1"; }
+          as_admin() { curl --silent -H "Authorization: Bearer $token" "$@"; }
+
+          start
+          token="$(post /api/v1/admin/login '{"email":"owner@example.com","password":"first-password-123"}' | jq -r .token)"
+          test "${#token}" -ge 40 || fail "signing in with the initial password failed"
+          test "$(as_admin --output /dev/null --write-out '%{http_code}' $api/api/v1/admin/overview)" = "403" || fail "the panel is usable before the initial password is replaced"
+          token="$(post /api/v1/admin/password '{"current_password":"first-password-123","new_password":"a much better passphrase"}' -H "Authorization: Bearer $token" | jq -r .token)"
+          test "${#token}" -ge 40 || fail "replacing the initial password failed"
+          test "$(as_admin $api/api/v1/admin/overview | jq -r .persistent)" = "true" || fail "settings are not being saved to the volume"
+          test "$(as_admin -X PATCH -H 'Content-Type: application/json' --data '{"enabled":false}' $api/api/v1/admin/platforms/tiktok | jq -r .enabled)" = "false" || fail "switching a platform off failed"
+          test "$(docker exec admin-api stat --format '%a' /srv/data/admin.json)" = "600" || fail "the account file is readable by others"
+
+          docker rm --force admin-api >/dev/null
+          start
+          test "$(as_admin --output /dev/null --write-out '%{http_code}' $api/api/v1/admin/overview)" = "401" || fail "a session survived the restart"
+          test "$(post /api/v1/admin/login '{"email":"owner@example.com","password":"first-password-123"}' | jq -r .error.code)" = "invalid_credentials" || fail "the initial password works again after a restart"
+          test "$(post /api/v1/admin/login '{"email":"owner@example.com","password":"a much better passphrase"}' | jq -r .must_change_password)" = "false" || fail "the chosen password was not kept"
+          test "$(curl --silent $api/api/v1/platforms | jq -r '.platforms[] | select(.id=="tiktok") | .enabled')" = "false" || fail "the switched-off platform came back on"
+          docker rm --force admin-api >/dev/null
+          echo "::notice title=Container image::administrator account, password change and platform switches survive a new container"
       - name: Stop cleanly
         run: |
           docker stop -t 25 api
@@ -135,7 +189,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.live_smoke) ||
       (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-smoke]'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: backend
@@ -150,10 +204,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
       - name: Install
         run: pip install -r requirements-dev.txt
-      # analyze -> download the smallest quality -> fetch a subtitle track, for each
-      # example link, with the default production policy. Results go to the run summary.
-      - name: Download from the example sources
-        run: python scripts/live_smoke.py
+      # 1. analyze -> download the smallest quality -> fetch a subtitle track, for each
+      #    example link, with the default production policy. A failure fails the job.
+      # 2. The compatibility check of the admin panel for every platform that is switched
+      #    on: one public video read per platform, nothing downloaded. This part only
+      #    reports what worked from this runner's network address; it never fails the job,
+      #    because many platforms turn data-centre addresses away.
+      # Results go to the run summary and to annotations on the run page.
+      - name: Download from the example sources, then survey the platforms
+        run: python scripts/live_smoke.py --survey
 
   site-check:
     name: Live website
