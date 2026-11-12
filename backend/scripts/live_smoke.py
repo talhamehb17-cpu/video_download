@@ -20,13 +20,16 @@ reads one public video per platform and downloads nothing. The outcome says what
 worked from the machine this ran on, on that day. It never fails the run: many
 platforms turn away data-centre addresses, and that is a fact to report, not a bug.
 
-    python scripts/live_smoke.py --survey
+    python scripts/live_smoke.py --survey          # the downloads, then the survey
+    python scripts/live_smoke.py --survey-only     # only the survey
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -104,6 +107,26 @@ async def check(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
     return row
 
 
+class FailedAttempts(logging.Handler):
+    """Collects what the sources answered when a check could not read a link.
+
+    The API never shows this text to anyone; it writes it to its log. The survey
+    reads it from there, so that a failure can be told apart from a refusal.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.by_platform: dict[str, list[str]] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not str(record.msg).startswith("compatibility check attempt failed") or not isinstance(record.args, tuple):
+            return
+        platform, url, code, detail = record.args
+        text = " ".join(str(detail).split()).removeprefix("DownloadError: ").removeprefix("ERROR: ")
+        text = re.sub(r";? ?please rep.*$", "", text)  # the extractor's standard request to report a bug
+        self.by_platform.setdefault(str(platform), []).append(f"{code} for {url}: {text}")
+
+
 async def survey(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Check every platform that is switched on, the way the admin panel does. Returns one row per platform."""
     signed_in = await client.post("/api/v1/admin/login", json={"email": ADMIN_EMAIL, "password": ADMIN_FIRST})
@@ -157,7 +180,7 @@ def outcome(platform: dict[str, Any]) -> str:
     return "unsupported" if platform["status"] == "unsupported" else "refused"
 
 
-def survey_report(platforms: list[dict[str, Any]]) -> None:
+def survey_report(platforms: list[dict[str, Any]], attempts: dict[str, list[str]] | None = None) -> None:
     """Print the survey: a table for the run summary, and one annotation per outcome."""
     def facts(platform: dict[str, Any]) -> str:
         result = platform["check"]
@@ -168,7 +191,9 @@ def survey_report(platforms: list[dict[str, Any]]) -> None:
             return str(result["error_code"])
         if not result["qualities"]:
             return "no video"
-        parts = [f"{result['max_height']}p" if result["max_height"] else "audio", f"{result['qualities']} qualities"]
+        # Some sources do not state the resolution of their files; that says nothing about the content.
+        size = f"{result['max_height']}p" if result["max_height"] else "resolution not stated"
+        parts = [size, f"{result['qualities']} qualities"]
         if result["subtitles"]:
             parts.append(f"{result['subtitles']} subtitle languages")
         if result["method"] == "generic":
@@ -181,10 +206,13 @@ def survey_report(platforms: list[dict[str, Any]]) -> None:
         groups[outcome(platform)].append(platform)
 
     order = list(OUTCOMES)
-    lines = ["| Platform | Outcome | Status after the check | What the check saw |", "| --- | --- | --- | --- |"]
+    header = ("Platform", "Outcome", "Status after the check", "What the check saw", "Link")
+    lines = [f"| {' | '.join(header)} |", f"| {' | '.join('---' for _ in header)} |"]
     for platform in sorted(platforms, key=lambda p: (order.index(outcome(p)), p["name"].lower())):
-        summary = (platform["check"] or {}).get("summary") or "The check did not finish in time."
-        cells = (platform["name"], OUTCOMES[outcome(platform)], platform["status"], f"{facts(platform)}: {summary}")
+        result = platform["check"] or {}
+        summary = result.get("summary") or "The check did not finish in time."
+        cells = (platform["name"], OUTCOMES[outcome(platform)], platform["status"], f"{facts(platform)}: {summary}",
+                 result.get("url") or "")
         lines.append(f"| {' | '.join(cells)} |")
     table = "\n".join(lines)
     # "Read a public video" is the fact. The status adds what the catalog knows about limits.
@@ -208,17 +236,39 @@ def survey_report(platforms: list[dict[str, Any]]) -> None:
             for index, chunk in enumerate(chunks, start=1):
                 part = f" {index}/{len(chunks)}" if len(chunks) > 1 else ""
                 print(f"::notice title=Platform survey - {OUTCOMES[key]}{part} - {len(members)}::{chunk}")
+
+    # What the sources answered where no link could be read: the first attempt that ended with the reported code.
+    names = {platform["id"]: platform["name"] for platform in platforms}
+    codes = {platform["id"]: (platform["check"] or {}).get("error_code") for platform in platforms}
+    answers: list[str] = []
+    for platform_id, rows in sorted((attempts or {}).items(), key=lambda item: names.get(item[0], item[0]).lower()):
+        if codes.get(platform_id) is None:
+            continue  # a later sample link worked
+        shown = next((row for row in rows if row.startswith(f"{codes[platform_id]} ")), rows[0])
+        answers.append(f"{names.get(platform_id, platform_id)}: {shown[:300]}")
+    if answers:
+        print("\nWhat the sources answered:\n" + "\n".join(f"- {answer}" for answer in answers))
+        if os.environ.get("GITHUB_ACTIONS"):
+            text = " || ".join(answers).replace("%", "%25").replace("\r", " ").replace("\n", " ")
+            chunks = [text[i:i + 1700] for i in range(0, len(text), 1700)][:5]
+            for index, chunk in enumerate(chunks, start=1):
+                print(f"::notice title=Platform survey - what the sources answered {index}/{len(chunks)}::{chunk}")
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_file:
         with Path(summary_file).open("a", encoding="utf-8") as handle:
             handle.write(f"## Platform survey from this runner\n\n{headline}\n\n{table}\n")
+            if answers:
+                listed = "\n".join(f"- {answer}" for answer in answers)
+                handle.write(f"\n### What the sources answered\n\n{listed}\n")
 
 
-async def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+async def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None, dict[str, list[str]]]:
     arguments = sys.argv[1:]
-    with_survey = "--survey" in arguments
+    only_survey = "--survey-only" in arguments
+    with_survey = only_survey or "--survey" in arguments
     urls = [argument for argument in arguments if not argument.startswith("--")]
     urls = urls or [example.url for example in EXAMPLES]
+    attempts = FailedAttempts()
     with tempfile.TemporaryDirectory(prefix="lumora-smoke-") as tmp:
         settings = Settings(
             _env_file=None, environment="test", storage_dir=Path(tmp) / "storage", data_dir=Path(tmp) / "data",
@@ -228,15 +278,20 @@ async def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
             admin_bootstrap_password=ADMIN_FIRST if with_survey else None,
         )
         app = create_app(settings)
+        # The checker writes what a source answered to the log only; listen there, without printing it twice.
+        checker_log = logging.getLogger("app.services.compat")
+        checker_log.setLevel(logging.INFO)
+        checker_log.addHandler(attempts)
+        checker_log.propagate = False
         transport = httpx.ASGITransport(app=app)
         api = httpx.AsyncClient(transport=transport, base_url="http://api.local", timeout=1200)
         async with app.router.lifespan_context(app), api as client:
             config = (await client.get("/api/v1/config")).json()
             print(f"policy={config['sources']['mode']} domains={len(config['sources']['domains'])}", flush=True)
-            rows = [await check(client, url) for url in urls]
+            rows = [] if only_survey else [await check(client, url) for url in urls]
             platforms = await survey(client) if with_survey else None
 
-    return rows, platforms
+    return rows, platforms, attempts.by_platform
 
 
 def report(rows: list[dict[str, Any]]) -> int:
@@ -262,8 +317,8 @@ def report(rows: list[dict[str, Any]]) -> int:
 
 
 if __name__ == "__main__":
-    smoke_rows, surveyed = asyncio.run(main())
-    exit_code = report(smoke_rows)
+    smoke_rows, surveyed, failed_attempts = asyncio.run(main())
+    exit_code = report(smoke_rows) if smoke_rows else 0
     if surveyed is not None:
-        survey_report(surveyed)
+        survey_report(surveyed, failed_attempts)
     raise SystemExit(exit_code)

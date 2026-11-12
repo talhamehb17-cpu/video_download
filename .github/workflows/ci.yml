@@ -204,15 +204,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
       - name: Install
         run: pip install -r requirements-dev.txt
-      # 1. analyze -> download the smallest quality -> fetch a subtitle track, for each
-      #    example link, with the default production policy. A failure fails the job.
-      # 2. The compatibility check of the admin panel for every platform that is switched
-      #    on: one public video read per platform, nothing downloaded. This part only
-      #    reports what worked from this runner's network address; it never fails the job,
-      #    because many platforms turn data-centre addresses away.
+      # analyze -> download the smallest quality -> fetch a subtitle track, for each
+      # example link, with the default production policy. A failure fails the job.
+      - name: Download from the example sources
+        run: python scripts/live_smoke.py
+      # The compatibility check of the admin panel for every platform that is switched
+      # on: one public video read per platform, nothing downloaded. It only reports
+      # what worked from this runner's network address and never fails the job,
+      # because many platforms turn data-centre addresses away.
       # Results go to the run summary and to annotations on the run page.
-      - name: Download from the example sources, then survey the platforms
-        run: python scripts/live_smoke.py --survey
+      - name: Survey the platforms
+        if: ${{ !cancelled() }}
+        run: python scripts/live_smoke.py --survey-only
 
   site-check:
     name: Live website

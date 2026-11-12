@@ -212,6 +212,12 @@ class CompatibilityChecker:
                     },
                     timeout=self._settings.admin_check_timeout_seconds, timeout_code="source_timeout",
                 )
+            for attempt in result.get("attempts") or []:
+                if isinstance(attempt, dict) and not attempt.get("ok"):
+                    # What the source said stays in the server log; the panel shows a fixed message.
+                    log.info("compatibility check attempt failed platform=%s url=%s code=%s detail=%s",
+                             platform.id, attempt.get("url"), attempt.get("code"),
+                             str(attempt.get("detail") or "")[:300])
             check = interpret(
                 result, given_url=url, seconds=time.monotonic() - started, catalogued=platform.builtin,
             )
