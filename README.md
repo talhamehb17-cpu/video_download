@@ -11,8 +11,9 @@ Lumora is a complete application in two parts:
 | Website | [`frontend/`](frontend) | React, TypeScript, Vite, Tailwind CSS, Framer Motion | Vercel (static) |
 | API | [`backend/`](backend) | FastAPI, yt-dlp, FFmpeg | Any container host (a Render blueprint is included) |
 
-The website is live at **<https://lumora-video.vercel.app>**. It needs an API to do anything: see
-[Deploying](#deploying) for the one-time step that connects the two.
+The website is live at **<https://lumora-video.vercel.app>** and uses an API at `https://api.deephq.online`.
+[Deploying](#deploying) explains how the two are hosted and connected, and [Testing](#testing) how the live
+site is checked.
 
 ## Contents
 
