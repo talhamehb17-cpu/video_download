@@ -256,9 +256,11 @@ async function checkService(ctx) {
   const { config } = ctx
   const policy = config.sources.mode === 'allowlist' ? `${config.sources.domains.length} sources on the allow list` : 'every supported source'
   const direct = await describeApi(ctx.apiOrigin, site.origin).catch((error) => `asking it directly failed: ${error.message}`)
+  // The name of the main script changes with every build of the site, so it tells deployments apart.
+  const build = await page.$eval('script[type=module][src]', (script) => script.src.split('/').pop().replace(/\.js$/, '')).catch(() => 'unknown')
   ctx.pass(
     'Service',
-    `${site.origin} ("${title}") says "${pill}" after ${seconds(started)}. API ${ctx.apiOrigin}: ${config.name} ${config.version}, ${policy}, ` +
+    `${site.origin} ("${title}", build ${build}) says "${pill}" after ${seconds(started)}. API ${ctx.apiOrigin}: ${config.name} ${config.version}, ${policy}, ` +
       `files up to ${megabytes(config.limits.max_file_size_bytes)} kept for ${span(config.limits.file_ttl_seconds)}. ${direct}`,
   )
   return true
