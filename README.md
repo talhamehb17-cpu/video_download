@@ -154,14 +154,26 @@ The limits in the blueprint (one download at a time, files up to 512 MB, kept fo
 starting points. **The blueprint has been checked against Render's documentation but not run on Render.**
 Raise the limits on a larger instance.
 
-Any other container host works the same way (Fly.io, Railway, Cloud Run with a single always-on instance, a
-VPS): build `backend/`, expose the port in `$PORT`, and set at least:
+**On your own server.** Any machine with Docker works, and so does any other container host (Fly.io,
+Railway, Cloud Run with a single always-on instance):
 
 ```bash
-ENVIRONMENT=production
-ALLOWED_ORIGINS=https://lumora-video.vercel.app   # the website's address
-CLIENT_IP_HEADER=CF-Connecting-IP                 # or TRUSTED_PROXY_HOPS; see Configuration
+docker build --tag lumora-api backend
+docker run --detach --name lumora-api --restart unless-stopped \
+  --publish 127.0.0.1:8000:8000 \
+  --env ENVIRONMENT=production \
+  --env ALLOWED_ORIGINS=https://lumora-video.vercel.app \
+  --env TRUSTED_PROXY_HOPS=1 \
+  lumora-api
 ```
+
+- `ALLOWED_ORIGINS` is the address of the website. Browsers refuse the API's answers without it.
+- The website is served over HTTPS, so the API must be too. Put a reverse proxy with a certificate in front
+  of port 8000, for example [Caddy](https://caddyserver.com) with `api.example.com { reverse_proxy 127.0.0.1:8000 }`.
+- `TRUSTED_PROXY_HOPS=1` tells the API that one proxy stands in front of it, so that limits apply per
+  visitor and not to the proxy. Caddy passes the visitor's address on by itself; nginx needs
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. Use `CLIENT_IP_HEADER` instead only when a
+  network such as Cloudflare sets such a header for you. [Configuration](#configuration) has the details.
 
 ### 2. Website
 
@@ -178,6 +190,13 @@ Until that variable is set, the site says "Download service not connected yet" a
 
 Open the website. The pill above the headline should read "Service online". Click an example link, pick a
 quality and download.
+
+Or let a browser do it. This opens the site in Chrome, downloads a video through it and reports each step:
+
+```bash
+cd e2e && npm ci
+node check-site.mjs https://lumora-video.vercel.app
+```
 
 If you later give the website a custom domain, add it to `ALLOWED_ORIGINS` on the API.
 
@@ -317,10 +336,17 @@ local sample source, so they need no internet access and contact no third-party 
 | Website | Lint, type-check, unit tests and the production build. |
 | API container image | Builds the image, starts it, checks health, FFmpeg, the non-root user, the source policy and a clean stop. |
 | Real public sources | Analyzes and downloads the example links from the Internet Archive and Wikimedia Commons. |
+| Live website | Opens the live site in Chrome and, for each example link: analyzes it, saves a subtitle track, downloads the video through the browser and deletes it from the server. |
 
-The last job depends on third-party sites, so it runs weekly, when started by hand from the Actions tab, or
-when a commit message contains `[live-smoke]`. Run it yourself with `python scripts/live_smoke.py`, optionally
-followed by links to test.
+The last two jobs depend on third-party sites and on the live deployment, so they do not run on ordinary
+pushes. They run weekly, when started by hand from the Actions tab, or when a commit message contains
+`[live-smoke]` or `[site-check]`.
+
+- **Real public sources** tests the code in the repository. Run it yourself with
+  `python scripts/live_smoke.py`, optionally followed by links to test.
+- **Live website** tests what visitors get: the deployed site, the deployed API and the sources together. It
+  is [`e2e/check-site.mjs`](e2e/check-site.mjs); the site's address is set in `ci.yml`. A failed weekly run
+  means the live site needs attention.
 
 Dependabot opens weekly update pull requests. **Keep yt-dlp current**: it follows the sites it supports, and
 an old version is the usual reason a source stops working.
