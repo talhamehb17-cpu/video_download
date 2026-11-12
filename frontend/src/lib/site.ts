@@ -34,5 +34,6 @@ export function sourceName(domain: string): string {
 }
 
 export function listSources(domains: string[]): string {
-  return [...domains].map(sourceName).sort((a, b) => a.localeCompare(b)).join(' · ')
+  // The space before each dot does not break, so a wrapped line never starts with a dot.
+  return [...domains].map(sourceName).sort((a, b) => a.localeCompare(b)).join('\u00a0· ')
 }

@@ -70,7 +70,11 @@ export default function Home({ service, onRetryService, onActiveSection }: HomeP
         busy={downloader.phase.name === 'analyzing'}
         inputRef={input}
       >
-        <ProcessingArea downloader={downloader} onStartOver={startOver} />
+        <ProcessingArea
+          downloader={downloader}
+          acceptedDomains={config?.sources.mode === 'allowlist' ? config.sources.domains : null}
+          onStartOver={startOver}
+        />
       </Hero>
       <Features config={config} />
       <HowItWorks />

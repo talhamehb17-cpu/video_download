@@ -19,6 +19,8 @@ export type Phase =
       name: 'job'
       analysis: Analysis
       job: Job
+      /** True until the first status answer after the one that created the job. */
+      fresh: boolean
       /** When the finished file will be deleted (`Date.now()` based), if it exists. */
       expiresAt: number | null
       busy: boolean
@@ -69,7 +71,15 @@ function withJob(state: State, job: Job): State {
       : null
   return {
     ...state,
-    phase: { name: 'job', analysis: phase.analysis, job, expiresAt, busy: previous?.busy ?? false, reconnecting: false },
+    phase: {
+      name: 'job',
+      analysis: phase.analysis,
+      job,
+      fresh: previous?.job.id !== job.id,
+      expiresAt,
+      busy: previous?.busy ?? false,
+      reconnecting: false,
+    },
   }
 }
 

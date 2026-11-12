@@ -35,6 +35,8 @@ interface ErrorCardProps {
   error: ApiError
   /** What was being attempted, e.g. the link. */
   subject?: string
+  /** Something this page knows that helps with the error, shown after the server's hint. */
+  note?: string
   onRetry?: () => void
   onDismiss?: () => void
   retryLabel?: string
@@ -42,7 +44,7 @@ interface ErrorCardProps {
 }
 
 /** A failure, explained in the server's own words (code-specific message and hint). */
-export function ErrorCard({ error, subject, onRetry, onDismiss, retryLabel = 'Try again', dismissLabel = 'Use another link' }: ErrorCardProps) {
+export function ErrorCard({ error, subject, note, onRetry, onDismiss, retryLabel = 'Try again', dismissLabel = 'Use another link' }: ErrorCardProps) {
   const Icon = ICONS[error.code] ?? TriangleAlert
   // When the server says how long to wait, hold the retry button until then. The
   // deadline is fixed when the error first appears, not recomputed on each render.
@@ -59,6 +61,7 @@ export function ErrorCard({ error, subject, onRetry, onDismiss, retryLabel = 'Tr
         <div className="min-w-0 flex-1">
           <p className="font-display text-lg font-semibold tracking-tight text-ink">{error.message}</p>
           {error.hint && <p className="mt-1 text-sm leading-relaxed text-ink-soft">{error.hint}</p>}
+          {note && <p className="mt-1 text-sm leading-relaxed text-ink-soft">{note}</p>}
           {subject && <p className="mt-2 truncate font-mono text-xs text-ink-mute">{subject}</p>}
           {(onRetry || onDismiss) && (
             <div className="mt-4 flex flex-wrap gap-2">

@@ -6,6 +6,7 @@ import { isActive } from '../../hooks/useDownloader'
 import { ApiError, apiUrl, type Analysis, type Job } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { formatBytes, formatClock, formatEta, formatSpeed, languageName } from '../../lib/format'
+import { isWaiting, jobStatusText } from '../../lib/jobStatus'
 import { Button } from '../ui/Button'
 import { buttonClass } from '../ui/buttonClass'
 import { ErrorCard } from './ErrorCard'
@@ -14,33 +15,14 @@ import { Poster } from './ResultCard'
 interface JobPanelProps {
   analysis: Analysis
   job: Job
+  /** True until the first status answer after the one that created the job. */
+  fresh: boolean
   expiresAt: number | null
   busy: boolean
   reconnecting: boolean
   onCancel: () => void
   onBack: () => void
   onReset: () => void
-}
-
-const PROCESSING_TEXT: Record<string, string> = {
-  merging: 'Merging video and audio',
-  embedding_subtitles: 'Embedding subtitles',
-  converting_subtitles: 'Converting subtitles',
-  optimizing: 'Finalizing the file',
-}
-
-/** What the server is doing right now, in plain words. */
-function statusText(job: Job): string {
-  if (job.status === 'queued') {
-    return job.queue_position && job.queue_position > 1 ? `Waiting in line (position ${job.queue_position})` : 'Waiting for a free slot'
-  }
-  if (job.stage === 'downloading') {
-    const { part, parts, part_kind: kind } = job.progress
-    const what = kind === 'video' ? 'Downloading video' : kind === 'audio' ? 'Downloading audio' : 'Downloading'
-    return parts && parts > 1 && part ? `${what} (part ${part} of ${parts})` : what
-  }
-  if (job.stage === 'processing') return PROCESSING_TEXT[job.stage_detail ?? ''] ?? 'Processing the file'
-  return 'Starting'
 }
 
 function ProgressBar({ percent, label }: { percent: number | null; label: string }) {
@@ -88,11 +70,11 @@ function Header({ analysis, job }: { analysis: Analysis; job: Job }) {
   )
 }
 
-function ActiveJob({ job, busy, reconnecting, onCancel }: Pick<JobPanelProps, 'job' | 'busy' | 'reconnecting' | 'onCancel'>) {
+function ActiveJob({ job, fresh, busy, reconnecting, onCancel }: Pick<JobPanelProps, 'job' | 'fresh' | 'busy' | 'reconnecting' | 'onCancel'>) {
   const { progress } = job
   const downloading = job.stage === 'downloading'
   const percent = downloading ? progress.percent : null
-  const status = statusText(job)
+  const status = jobStatusText(job, fresh)
 
   const stats: string[] = []
   if (downloading && progress.downloaded_bytes > 0) {
@@ -111,7 +93,7 @@ function ActiveJob({ job, busy, reconnecting, onCancel }: Pick<JobPanelProps, 'j
     <div className="mt-6">
       <div className="mb-2.5 flex items-baseline justify-between gap-3">
         <p className="flex min-w-0 items-center gap-2 text-sm font-medium text-ink" aria-live="polite">
-          {job.status === 'queued' && <Hourglass className="size-4 shrink-0 text-warn" aria-hidden />}
+          {isWaiting(job, fresh) && <Hourglass className="size-4 shrink-0 text-warn" aria-hidden />}
           <span className="truncate">{status}…</span>
         </p>
         {percent !== null && <span className="font-mono text-sm tabular-nums text-ink">{percent.toFixed(percent >= 10 ? 0 : 1)}%</span>}
@@ -219,14 +201,14 @@ const ENDED_TEXT: Partial<Record<Job['status'], { title: string; text: string }>
   deleted: { title: 'File deleted', text: 'The file was removed from the server right away, as you asked.' },
 }
 
-export function JobPanel({ analysis, job, expiresAt, busy, reconnecting, onCancel, onBack, onReset }: JobPanelProps) {
+export function JobPanel({ analysis, job, fresh, expiresAt, busy, reconnecting, onCancel, onBack, onReset }: JobPanelProps) {
   const ended = ENDED_TEXT[job.status]
 
   return (
     <div className="glass rounded-3xl p-4 text-left sm:p-6">
       <Header analysis={analysis} job={job} />
 
-      {isActive(job) && <ActiveJob job={job} busy={busy} reconnecting={reconnecting} onCancel={onCancel} />}
+      {isActive(job) && <ActiveJob job={job} fresh={fresh} busy={busy} reconnecting={reconnecting} onCancel={onCancel} />}
 
       {job.status === 'completed' && <ReadyJob job={job} expiresAt={expiresAt} busy={busy} onCancel={onCancel} onBack={onBack} />}
 

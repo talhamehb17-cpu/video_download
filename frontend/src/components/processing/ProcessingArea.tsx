@@ -2,6 +2,7 @@ import { AnimatePresence, m } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 
 import type { Downloader } from '../../hooks/useDownloader'
+import { listSources } from '../../lib/site'
 import { AnalyzingCard } from './AnalyzingCard'
 import { ErrorCard } from './ErrorCard'
 import { JobPanel } from './JobPanel'
@@ -9,6 +10,8 @@ import { ResultCard } from './ResultCard'
 
 interface ProcessingAreaProps {
   downloader: Downloader
+  /** The domains this service accepts, when it works from an allow list. */
+  acceptedDomains: string[] | null
   /** Clear everything and put the cursor back in the link field. */
   onStartOver: () => void
 }
@@ -16,7 +19,7 @@ interface ProcessingAreaProps {
 const TRANSITION = { duration: 0.45, ease: [0.16, 1, 0.3, 1] as const }
 
 /** Everything that happens after "Download" is pressed, one state at a time. */
-export function ProcessingArea({ downloader, onStartOver }: ProcessingAreaProps) {
+export function ProcessingArea({ downloader, acceptedDomains, onStartOver }: ProcessingAreaProps) {
   const { phase } = downloader
   const container = useRef<HTMLDivElement | null>(null)
 
@@ -36,6 +39,12 @@ export function ProcessingArea({ downloader, onStartOver }: ProcessingAreaProps)
         <ErrorCard
           error={phase.error}
           subject={phase.url}
+          // A link from a site that is not enabled: say which ones are.
+          note={
+            phase.error.code === 'domain_not_allowed' && acceptedDomains?.length
+              ? `Links from these sources work: ${listSources(acceptedDomains)}.`
+              : undefined
+          }
           // Only offer "Try again" when asking again could change the answer.
           onRetry={phase.error.retryable ? () => downloader.analyze(phase.url) : undefined}
           onDismiss={onStartOver}
@@ -64,6 +73,7 @@ export function ProcessingArea({ downloader, onStartOver }: ProcessingAreaProps)
         <JobPanel
           analysis={phase.analysis}
           job={phase.job}
+          fresh={phase.fresh}
           expiresAt={phase.expiresAt}
           busy={phase.busy}
           reconnecting={phase.reconnecting}
