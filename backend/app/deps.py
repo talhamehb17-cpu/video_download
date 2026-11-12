@@ -7,6 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request, Response
 
+from app.admin.auth import Session
 from app.errors import AppError
 from app.security.client import ClientIdentity, identify_client
 from app.state import Services
@@ -42,3 +43,31 @@ def rate_limited(bucket: str) -> Callable[..., ClientIdentity]:
         return client
 
     return dependency
+
+
+# ---------------------------------------------------------------------------- admin
+def _bearer(request: Request) -> str | None:
+    scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
+    return token.strip() if scheme.lower() == "bearer" and token.strip() else None
+
+
+def admin_session(
+    request: Request, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("admin"))]
+) -> Session:
+    """A signed-in administrator. Every admin endpoint depends on this (or on the stricter one below)."""
+    if not services.admin.configured:
+        raise AppError("admin_not_configured")
+    return services.admin.authenticate(_bearer(request))
+
+
+AdminSessionDep = Annotated[Session, Depends(admin_session)]
+
+
+def admin_ready(session: AdminSessionDep) -> Session:
+    """A signed-in administrator who has replaced the initial password."""
+    if session.must_change_password:
+        raise AppError("password_change_required")
+    return session
+
+
+AdminDep = Annotated[Session, Depends(admin_ready)]

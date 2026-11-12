@@ -18,6 +18,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
+from app.api.admin import router as admin_router
 from app.api.routes import router
 from app.config import Settings, get_settings
 from app.errors import ERRORS, AppError
@@ -172,6 +173,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if services.ffmpeg_path is None:
             log.warning("FFmpeg not found: merging, container fixes and subtitle conversion are disabled")
+        if not services.admin.configured:
+            log.info("admin panel is off: set ADMIN_EMAIL and ADMIN_BOOTSTRAP_PASSWORD to switch it on")
         if settings.unsafe_allow_hosts:
             log.warning("UNSAFE_ALLOW_HOSTS is set (%s): never use this in production", settings.unsafe_allow_hosts)
         housekeeping = asyncio.create_task(_housekeeping(services), name="housekeeping")
@@ -181,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             housekeeping.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await housekeeping
+            await services.checker.shutdown()
             await services.jobs.shutdown()
             services.storage.wipe()
             log.info("stopped: workers terminated and temporary files deleted")
@@ -203,8 +207,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.allowed_origins,
         allow_origin_regex=settings.allowed_origin_regex,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
         expose_headers=["Content-Disposition", "Content-Length", "Retry-After", "X-Request-ID",
                         "X-RateLimit-Limit", "X-RateLimit-Remaining"],
         max_age=600,
@@ -230,6 +234,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         code = _STATUS_CODES.get(exc.status_code)
         if code is None:
             code = "internal_error" if exc.status_code >= 500 else "validation_error"
+        if exc.status_code == 405:
+            # Usually someone opened an address in a browser tab (a GET request) that
+            # only takes POST. Say which requests work instead of just "no".
+            allowed = (exc.headers or {}).get("Allow", "")
+            return error_response(AppError(
+                code, headers={"Allow": allowed} if allowed else None,
+                message=f"This address doesn't accept {request.method} requests.",
+                hint=(f"It accepts {allowed.replace(', ', ' or ')}. " if allowed else "")
+                + "Opening it in a browser tab sends a GET request; use the website instead.",
+            ))
         return error_response(AppError(code, status=exc.status_code if code in ERRORS else None))
 
     @app.get("/", include_in_schema=False)
@@ -238,6 +252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 **({"docs": "/docs"} if docs else {})}
 
     app.include_router(router)
+    app.include_router(admin_router)
     return app
 
 

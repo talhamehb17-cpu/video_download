@@ -16,6 +16,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     for code, pattern in (
         ("blocked_destination", r"blocked by network policy"),
         ("file_too_large", r"file too large|errno 27|larger than max-filesize"),
+        ("insufficient_storage", r"no space left on device|errno 28|disk quota exceeded"),
         ("subtitle_unavailable", r"unable to download video subtitles|subtitle"),
         ("drm_protected", r"\bdrm\b|widevine|fairplay|playready"),
         ("verification_required",

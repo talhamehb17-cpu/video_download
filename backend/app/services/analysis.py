@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.errors import AppError
+from app.platforms.registry import PlatformRegistry
 from app.security.client import ClientIdentity
 from app.security.url_validation import SourcePolicy, validate_public_url, validate_url_syntax
 from app.services.formats import QualityChoice, SubtitleChoice, build_qualities, build_subtitles
@@ -47,13 +48,14 @@ def clean_text(value: Any, *, limit: int = 300) -> str | None:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def source_policy(settings: Settings) -> SourcePolicy:
+def source_policy(settings: Settings, platforms: PlatformRegistry | None = None) -> SourcePolicy:
     return SourcePolicy(
         mode=settings.source_policy,
         allowed_domains=tuple(settings.allowed_domains),
         blocked_domains=tuple(settings.blocked_domains),
         allowed_ports=frozenset(settings.allowed_ports),
         exempt=settings.unsafe_allow_pairs,
+        platforms=platforms,
     )
 
 
@@ -62,6 +64,7 @@ def worker_limits(settings: Settings) -> dict[str, Any]:
         "max_file_bytes": settings.max_file_size_bytes,
         "max_duration_seconds": settings.max_duration_seconds,
         "block_age_restricted": settings.block_age_restricted,
+        "min_free_bytes": settings.min_free_disk_bytes,
     }
 
 
@@ -131,11 +134,16 @@ class LightTaskLimiter:
 
 
 class AnalysisService:
-    def __init__(self, settings: Settings, storage: TempStorage, ffmpeg_path: str | None) -> None:
+    def __init__(
+        self, settings: Settings, storage: TempStorage, ffmpeg_path: str | None,
+        platforms: PlatformRegistry | None = None, on_failure: Callable[[str, AppError], None] | None = None,
+    ) -> None:
         self._settings = settings
         self._storage = storage
         self._ffmpeg_path = ffmpeg_path
-        self._policy = source_policy(settings)
+        self._platforms = platforms
+        self._on_failure = on_failure
+        self._policy = source_policy(settings, platforms)
         self._items: dict[str, Analysis] = {}
         self._light = LightTaskLimiter(settings.max_concurrent_light_tasks, settings.max_light_jobs_per_client)
 
@@ -172,12 +180,18 @@ class AnalysisService:
             self._storage.remove(directory)
             log.info("analyze failed domain=%s code=%s client=%s detail=%s",
                      host, exc.code, client.log_label, (exc.detail or "")[:400])
+            if self._platforms is not None:
+                self._platforms.record(host, ok=False)
+            if self._on_failure is not None:
+                self._on_failure(host, exc)
             raise
         except BaseException:
             self._storage.remove(directory)
             raise
         self._items[analysis_id] = analysis
         self._evict_overflow()
+        if self._platforms is not None:
+            self._platforms.record(host, ok=True)
         log.info("analyze ok domain=%s extractor=%s qualities=%d subtitles=%d seconds=%.1f client=%s",
                  analysis.domain, analysis.extractor, len(analysis.qualities), len(analysis.subtitles),
                  time.monotonic() - started, client.log_label)

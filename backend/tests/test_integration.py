@@ -64,7 +64,7 @@ def storage(client: httpx.AsyncClient) -> Path:
 async def test_analyze_page_with_qualities_subtitles_and_poster(live: httpx.AsyncClient, source: str) -> None:
     analysis = await analyze(live, f"{source}/watch/demo")
     assert analysis["title"] == "Lumora sample clip"
-    assert analysis["source"] == {"domain": "127.0.0.1", "extractor": "HTML5MediaEmbed"}
+    assert analysis["source"] == {"domain": "127.0.0.1", "extractor": "HTML5MediaEmbed", "platform": None}
     assert [(q["label"], q["container"], q["recommended"]) for q in analysis["qualities"]] == [
         ("720p", "mp4", True), ("360p", "mp4", False), ("240p", "mp4", False),
     ]

@@ -11,7 +11,13 @@ from fastapi.responses import FileResponse
 from app import schemas
 from app.deps import ClientDep, ServicesDep, rate_limited
 from app.errors import AppError
-from app.presenters import analysis_response, config_response, health_response, job_response
+from app.presenters import (
+    analysis_response,
+    config_response,
+    health_response,
+    job_response,
+    platforms_response,
+)
 from app.security.client import ClientIdentity
 from app.security.filenames import build_filename, content_disposition
 from app.services.jobs import JobStatus
@@ -22,7 +28,7 @@ api = APIRouter(prefix="/api/v1")
 
 _ID_RE = re.compile(schemas.ID_PATTERN)
 ERRORS: dict[int | str, dict[str, Any]] = {
-    code: {"model": schemas.ErrorResponse} for code in (404, 409, 410, 413, 422, 429, 500, 502, 503, 504)
+    code: {"model": schemas.ErrorResponse} for code in (404, 409, 410, 413, 422, 429, 500, 502, 503, 504, 507)
 }
 
 AnalysisId = Annotated[str, Path(min_length=16, max_length=64)]
@@ -49,6 +55,14 @@ async def config(
     return config_response(services)
 
 
+@api.get("/platforms", response_model=schemas.PlatformsResponse, tags=["meta"],
+         summary="Platforms this service knows, and what to expect from each")
+async def platforms(
+    services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("default"))]
+) -> schemas.PlatformsResponse:
+    return platforms_response(services)
+
+
 # ----------------------------------------------------------------------------- analysis
 @api.post(
     "/analyze", response_model=schemas.AnalysisResponse, responses=ERRORS, tags=["analysis"],
@@ -60,7 +74,7 @@ async def analyze(
     client: Annotated[ClientIdentity, Depends(rate_limited("analyze"))],
 ) -> schemas.AnalysisResponse:
     analysis = await services.analyses.analyze(body.url, client)
-    return analysis_response(analysis)
+    return analysis_response(analysis, services.platforms)
 
 
 @api.get(

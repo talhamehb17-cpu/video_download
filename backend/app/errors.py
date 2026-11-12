@@ -8,7 +8,7 @@ Status codes carry one promise the frontend relies on: **422 means the request
 itself cannot be fulfilled** (a wrong, private or disallowed link, an oversized
 file), so sending it again would fail the same way and no "Try again" is offered.
 Anything that may succeed later (rate limits, a busy server, a source that timed
-out) uses 409, 410, 429 or 5xx instead.
+out, a full disk) uses 409, 410, 429 or 5xx instead.
 """
 
 from __future__ import annotations
@@ -32,8 +32,16 @@ ERRORS: dict[str, ErrorSpec] = {
         "Only publicly reachable pages are supported.",
     ),
     "domain_not_allowed": ErrorSpec(
-        422, "This source isn't enabled on this service.",
-        "The operator restricts which sites can be processed.",
+        422, "This website isn't enabled on this service.",
+        "Only the platforms listed on this site can be processed.",
+    ),
+    "platform_disabled": ErrorSpec(
+        422, "This platform is switched off on this service.",
+        "The operator of this service has switched it off.",
+    ),
+    "platform_unsupported": ErrorSpec(
+        422, "Videos from this platform can't be downloaded.",
+        "The platform protects its videos, and Lumora never circumvents that.",
     ),
     # --- what the source told us ---------------------------------------------------
     "unsupported_source": ErrorSpec(
@@ -104,6 +112,10 @@ ERRORS: dict[str, ErrorSpec] = {
     ),
     "server_busy": ErrorSpec(503, "The service is at capacity right now.", "Please try again in a minute."),
     "storage_full": ErrorSpec(503, "The service is out of temporary storage right now.", "Please try again shortly."),
+    "insufficient_storage": ErrorSpec(
+        507, "The server doesn't have enough free space for this file right now.",
+        "Pick a smaller quality, or try again in a few minutes.",
+    ),
     "ffmpeg_unavailable": ErrorSpec(503, "Media processing is unavailable on this server."),
     "analysis_expired": ErrorSpec(410, "This analysis has expired.", "Analyze the link again."),
     "option_not_found": ErrorSpec(404, "That option doesn't exist for this video."),
@@ -113,7 +125,23 @@ ERRORS: dict[str, ErrorSpec] = {
     "job_timeout": ErrorSpec(504, "Processing took longer than this service allows."),
     "cancelled": ErrorSpec(409, "The download was cancelled."),
     "not_found_route": ErrorSpec(404, "Not found."),
-    "method_not_allowed": ErrorSpec(405, "Method not allowed."),
+    "method_not_allowed": ErrorSpec(405, "This address doesn't accept this kind of request."),
+    # --- administration ---------------------------------------------------------------
+    "admin_not_configured": ErrorSpec(
+        503, "The admin panel isn't set up on this server.",
+        "Set ADMIN_EMAIL and ADMIN_BOOTSTRAP_PASSWORD on the server and restart the API.",
+    ),
+    "invalid_credentials": ErrorSpec(401, "The e-mail address or password is wrong."),
+    "too_many_attempts": ErrorSpec(
+        429, "Too many failed sign-in attempts.", "Sign-in is paused for a while. Please wait and try again."
+    ),
+    "not_authenticated": ErrorSpec(401, "Please sign in.", "Your session may have ended."),
+    "password_change_required": ErrorSpec(403, "Choose a new password before you continue."),
+    "weak_password": ErrorSpec(422, "That password can't be used."),
+    "platform_not_found": ErrorSpec(404, "That platform doesn't exist."),
+    "platform_exists": ErrorSpec(409, "That website is already on the list."),
+    "platform_locked": ErrorSpec(409, "This platform can't be changed that way."),
+    "check_in_progress": ErrorSpec(409, "A check is already running for this platform.", "Wait for it to finish."),
     "internal_error": ErrorSpec(500, "Something went wrong on our side.", "Please try again."),
 }
 

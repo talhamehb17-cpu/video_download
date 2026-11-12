@@ -15,7 +15,8 @@ async def test_health_config_and_root(client: httpx.AsyncClient) -> None:
     health = (await client.get("/health")).json()
     assert health["status"] == "ok" and health["active_jobs"] == 0
     config = (await client.get("/api/v1/config")).json()
-    assert config["sources"]["mode"] == "allowlist" and "archive.org" in config["sources"]["domains"]
+    assert config["sources"]["mode"] == "platforms" and "archive.org" in config["sources"]["domains"]
+    assert "youtube.com" in config["sources"]["domains"] and "netflix.com" not in config["sources"]["domains"]
     assert config["limits"]["max_file_size_bytes"] > 0 and config["capabilities"]["subtitle_formats"] == ["srt", "vtt"]
     for example in config["sources"]["examples"]:     # examples only ever point at enabled sources
         host = example["url"].split("/")[2]
@@ -32,17 +33,19 @@ async def test_example_links_are_configurable_and_never_point_at_a_refused_sourc
         examples: list[dict[str, str]] = (await client.get("/api/v1/config")).json()["sources"]["examples"]
         return examples
 
-    # default: the built-in films, all on the allow list
+    # default: the built-in films, both from platforms that are switched on
     assert {e["label"] for e in await offered()} == {"Big Buck Bunny", "Sintel"}
-    # narrowing the allow list drops the examples that would now be refused
-    assert [e["label"] for e in await offered(allowed_domains=["archive.org"])] == ["Big Buck Bunny"]
+    # an allow list drops the examples that it would refuse
+    narrowed = await offered(source_policy="allowlist", allowed_domains=["archive.org"])
+    assert [e["label"] for e in narrowed] == ["Big Buck Bunny"]
     # an operator's own list: refused, internal and malformed targets are filtered out
     custom = await offered(
         unsafe_allow_hosts=["127.0.0.1:8765"],
         example_links=(
             "Sample clip | local sample source | http://127.0.0.1:8765/watch/demo;"
             "Moon landing | NASA | https://images.nasa.gov/details/Apollo_11;"
-            "Elsewhere | Not enabled | https://www.youtube.com/watch?v=abc;"
+            "Elsewhere | Not enabled | https://videos.example.org/watch?v=abc;"
+            "Protected | DRM | https://www.netflix.com/watch/1;"
             "Internal | Metadata | http://169.254.169.254/latest/;"
             "Other port | Loopback | http://127.0.0.1:9999/x"
         ),
@@ -66,7 +69,8 @@ async def test_example_links_are_configurable_and_never_point_at_a_refused_sourc
     ("http://10.0.0.5/video.mp4", "blocked_destination"),
     ("http://[::1]:8000/", "blocked_destination"),
     ("https://user:pw@archive.org/x", "invalid_url"),
-    ("https://www.youtube.com/watch?v=abc", "domain_not_allowed"),
+    ("https://videos.example.org/watch?v=abc", "domain_not_allowed"),
+    ("https://www.netflix.com/watch/80100172", "platform_unsupported"),
     ("https://archive.org.evil.com/x", "domain_not_allowed"),
 ])
 async def test_analyze_rejects_bad_links_without_touching_the_network(

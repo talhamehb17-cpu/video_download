@@ -19,6 +19,9 @@ dist/
 *.tsbuildinfo
 .vite/
 
+# The API's own data: hashed admin password, platform settings
+backend/data/
+
 # Generated sample media and temporary downloads
 .fixtures/
 lumora-media/

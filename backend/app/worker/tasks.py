@@ -1,4 +1,4 @@
-"""The three things the worker can do: analyze a page, download a format, fetch a subtitle.
+"""What the worker can do: analyze a page, download a format, fetch a subtitle, check a platform.
 
 Imported only after :mod:`app.worker.guard` has locked the process down.
 """
@@ -8,17 +8,20 @@ from __future__ import annotations
 import copy
 import json
 import re
+import shutil
 import sys
 import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yt_dlp
 from yt_dlp.downloader.external import FFmpegFD
 from yt_dlp.utils import DownloadError, GeoRestrictedError, UnsupportedError
 
+from app.platforms.registry import host_matches
 from app.services.formats import ALLOWED_PROTOCOLS, usable_streams
 from app.worker import guard
 from app.worker.classify import classify_message
@@ -311,12 +314,25 @@ def analyze(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------- download
+def _free_bytes(directory: Path) -> int | None:
+    try:
+        return shutil.disk_usage(directory).free
+    except OSError:
+        return None
+
+
 class _Progress:
     """Aggregates per-format download callbacks into one honest overall figure."""
 
     MIN_INTERVAL = 0.2
 
-    def __init__(self, emit: Emit, parts: list[dict[str, Any]], max_bytes: int | None) -> None:
+    def __init__(
+        self, emit: Emit, parts: list[dict[str, Any]], max_bytes: int | None,
+        *, work_dir: Path | None = None, min_free_bytes: int = 0,
+    ) -> None:
+        self._work_dir = work_dir
+        self._min_free = min_free_bytes
+        self._last_space_check = 0.0
         self._emit = emit
         self._order = [str(p["format_id"]) for p in parts]
         self._kind = {str(p["format_id"]): str(p.get("kind") or "media") for p in parts}
@@ -355,6 +371,12 @@ class _Progress:
                 raise TaskError("file_too_large", f"exceeds {self._max_bytes} bytes")
 
         now = time.monotonic()
+        if self._min_free and self._work_dir is not None and now - self._last_space_check >= 1.0:
+            # Stop before the disk is full: other services on this machine need it too.
+            self._last_space_check = now
+            free = _free_bytes(self._work_dir)
+            if free is not None and free < self._min_free:
+                raise TaskError("insufficient_storage", f"{free} bytes free, floor is {self._min_free}")
         if status != "finished" and now - self._last_emit < self.MIN_INTERVAL:
             return
         self._last_emit = now
@@ -447,7 +469,11 @@ def download(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
     if max_bytes and len(known_sizes) == len(parts) and sum(known_sizes) > max_bytes:
         raise TaskError("file_too_large", f"expected {sum(known_sizes)} bytes")
 
-    progress = _Progress(emit, parts, max_bytes)
+    min_free = int(limits.get("min_free_bytes") or 0)
+    free = _free_bytes(work_dir)
+    if min_free and free is not None and free < min_free:
+        raise TaskError("insufficient_storage", f"{free} bytes free before the download, floor is {min_free}")
+    progress = _Progress(emit, parts, max_bytes, work_dir=work_dir, min_free_bytes=min_free)
     options = base_options(task, log) | {
         "format": task["format_spec"],
         "outtmpl": {"default": "media.%(ext)s"},
@@ -550,7 +576,119 @@ def subtitle(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
     return {"file": final.name, "size": final.stat().st_size}
 
 
+# ------------------------------------------------------------------------------ compat
+MAX_SAMPLE_LINKS = 3
+
+
+def _sample_worthy(test: dict[str, Any]) -> bool:
+    """A test link of the extractor's maintainers that points to one plain, public video."""
+    info = test.get("info_dict")
+    return (
+        not test.get("only_matching") and not test.get("skip")
+        and not any(str(key).startswith("playlist") for key in test)
+        and isinstance(info, dict) and bool(info.get("id")) and not info.get("is_live")
+        and info.get("live_status") in (None, "not_live", "was_live")
+        and not (info.get("age_limit") or 0) >= 18
+    )
+
+
+def find_integrations(domains: list[str], url: str | None) -> tuple[list[str], list[str]]:
+    """Dedicated extractors for a website, and sample links to try when none was given.
+
+    The generic reader (which looks for a video file or player on any page) is not
+    an integration and is left out.
+    """
+    from yt_dlp.extractor import gen_extractor_classes
+
+    names: list[str] = []
+    samples: list[tuple[int, str]] = []
+    for extractor in gen_extractor_classes():
+        if extractor.ie_key() == "Generic":
+            continue
+        try:
+            tests = list(extractor.get_testcases(include_onlymatching=True))
+        except Exception:  # one broken extractor must not hide the others
+            tests = []
+        hit = False
+        for test in tests:
+            test_url = test.get("url")
+            if not isinstance(test_url, str):
+                continue
+            try:
+                host = (urlsplit(test_url).hostname or "").lower()
+            except ValueError:
+                continue
+            if not any(host_matches(host, domain) for domain in domains):
+                continue
+            hit = True
+            if _sample_worthy(test):
+                samples.append((len(tests), test_url))
+        if not hit and url is not None:
+            try:
+                hit = bool(extractor.suitable(url))
+            except Exception:
+                hit = False
+        if hit:
+            names.append(str(extractor.IE_NAME))
+    # Links of the extractor with the most tests first: that is the main one.
+    ordered = list(dict.fromkeys(link for _, link in sorted(samples, key=lambda item: -item[0])))
+    return sorted(set(names))[:12], ordered[:MAX_SAMPLE_LINKS]
+
+
+def _try_link(task: dict[str, Any], url: str) -> dict[str, Any]:
+    """Read one link exactly as an analysis would, and say what was found."""
+    log = _Log()
+    started = time.monotonic()
+    try:
+        with yt_dlp.YoutubeDL(base_options(task, log) | {"skip_download": True}) as ydl:
+            raw = ydl.extract_info(url, download=False)
+            if not raw:
+                raise TaskError("unsupported_source", "extractor returned nothing")
+            info = ydl.sanitize_info(raw)
+            if info.get("_type") in ("playlist", "multi_video"):
+                entries = [entry for entry in (info.get("entries") or []) if isinstance(entry, dict)]
+                if not entries:
+                    raise TaskError("unsupported_source", "no playable entry in playlist")
+                info = entries[0]
+            info = ydl.sanitize_info(info, remove_private_keys=True)
+            enforce_content_policy(info, task.get("limits") or {})
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as exc:
+        code, detail = describe_error(exc, log, default="extraction_failed")
+        return {"url": url, "ok": False, "code": code, "detail": detail[:300],
+                "seconds": round(time.monotonic() - started, 1)}
+    streams, _total, _drm = usable_streams(info)
+    heights = [stream.height for stream in streams if stream.height]
+    subtitles = info.get("subtitles")
+    title = info.get("title")
+    return {
+        "url": url, "ok": True,
+        "extractor": str(info.get("extractor_key") or "Generic"),
+        "title": title[:200] if isinstance(title, str) else None,
+        "streams": len(streams),
+        "video": sum(1 for stream in streams if stream.kind in ("muxed", "video")),
+        "audio": sum(1 for stream in streams if stream.kind in ("muxed", "audio")),
+        "max_height": max(heights) if heights else None,
+        "subtitles": len(subtitles) if isinstance(subtitles, dict) else 0,
+        "seconds": round(time.monotonic() - started, 1),
+    }
+
+
+def compat(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
+    """Check what this server can do with a website: is there an integration, does a link work?"""
+    url = task.get("url") if isinstance(task.get("url"), str) else None
+    integrations, samples = find_integrations([str(d) for d in task.get("domains") or []], url)
+    attempts: list[dict[str, Any]] = []
+    for link in ([url] if url else samples):
+        attempts.append(_try_link(task, link))
+        if attempts[-1]["ok"]:
+            break
+    return {"integrations": integrations, "attempts": attempts, "sample_links": bool(not url and samples)}
+
+
 TASKS: dict[str, tuple[Callable[[dict[str, Any], Emit, _Log], dict[str, Any]], str]] = {
+    "compat": (compat, "extraction_failed"),
     "analyze": (analyze, "extraction_failed"),
     "download": (download, "download_failed"),
     "subtitle": (subtitle, "subtitle_unavailable"),

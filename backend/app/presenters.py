@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
 
 from app import __version__, schemas
+from app.admin.auth import Session
 from app.errors import AppError
-from app.security.url_validation import SourcePolicy, validate_url_syntax
+from app.platforms.registry import STATUSES, Platform, PlatformRegistry
+from app.security.url_validation import SourcePolicy, domain_matches, validate_url_syntax
 from app.services.analysis import Analysis, source_policy
 from app.services.jobs import Job, JobManager, JobStatus
 from app.state import Services
@@ -48,7 +51,7 @@ def examples(services: Services) -> list[schemas.Example]:
     candidates = EXAMPLES if configured is None else tuple(
         schemas.Example(label=label, source=source, url=url) for label, source, url in configured
     )
-    policy = source_policy(settings)
+    policy = source_policy(settings, services.platforms)
     return [example for example in candidates if _accepted(example.url, policy)]
 
 
@@ -60,7 +63,8 @@ def error_body(error: AppError) -> schemas.ErrorBody:
     return schemas.ErrorBody(code=error.code, message=error.message, hint=error.hint, retry_after=error.retry_after)
 
 
-def analysis_response(analysis: Analysis) -> schemas.AnalysisResponse:
+def analysis_response(analysis: Analysis, platforms: PlatformRegistry | None = None) -> schemas.AnalysisResponse:
+    platform = platforms.match(analysis.domain) if platforms is not None else None
     return schemas.AnalysisResponse(
         id=analysis.id,
         url=analysis.url,
@@ -68,7 +72,9 @@ def analysis_response(analysis: Analysis) -> schemas.AnalysisResponse:
         uploader=analysis.uploader,
         duration=analysis.duration,
         thumbnail_url=f"{API_PREFIX}/analyses/{analysis.id}/thumbnail" if analysis.thumbnail else None,
-        source=schemas.Source(domain=analysis.domain, extractor=analysis.extractor),
+        source=schemas.Source(
+            domain=analysis.domain, extractor=analysis.extractor, platform=platform.name if platform else None
+        ),
         qualities=[
             schemas.Quality(
                 id=q.id, kind=q.kind, label=q.label, container=q.container,  # type: ignore[arg-type]
@@ -133,8 +139,12 @@ def job_response(job: Job, manager: JobManager) -> schemas.JobResponse:
 def config_response(services: Services) -> schemas.ConfigResponse:
     settings = services.settings
     ffmpeg = services.ffmpeg_path is not None
-    allowlist = settings.source_policy == "allowlist"
-    domains = sorted(settings.allowed_domains) if allowlist else []
+    if settings.source_policy == "allowlist":
+        domains = sorted(settings.allowed_domains)
+    elif settings.source_policy == "platforms":
+        domains = services.platforms.active_domains()
+    else:
+        domains = []
     return schemas.ConfigResponse(
         name=settings.app_name,
         version=__version__,
@@ -162,4 +172,91 @@ def health_response(services: Services) -> schemas.HealthResponse:
         active_jobs=services.jobs.count(JobStatus.RUNNING),
         queued_jobs=services.jobs.count(JobStatus.QUEUED),
         uptime_seconds=int(time.monotonic() - services.started_at),
+    )
+
+
+# ---------------------------------------------------------------------------- platforms
+_UNCONFIRMED = "Not confirmed on this server yet, so links may fail."
+
+
+def _accepts(platform: Platform, services: Services) -> bool:
+    """Whether a link from this platform would pass the source policy right now."""
+    settings = services.settings
+    if any(domain_matches(d.removesuffix(".*"), settings.blocked_domains) for d in platform.domains):
+        return False
+    if settings.source_policy == "allowlist":
+        return platform.can_enable and any(
+            domain_matches(d.removesuffix(".*"), settings.allowed_domains) for d in platform.domains
+        )
+    return platform.active
+
+
+def platforms_response(services: Services) -> schemas.PlatformsResponse:
+    """What visitors may know: platforms that work, and well-known ones that never will."""
+    items: list[schemas.PlatformInfo] = []
+    for platform in services.platforms.all():
+        accepted = _accepts(platform, services)
+        if not accepted and not platform.builtin:
+            continue  # websites under review are the administrator's business
+        status = platform.status
+        note = platform.note
+        if status == "requires_review":
+            status, note = "partial", note or _UNCONFIRMED
+        items.append(schemas.PlatformInfo(
+            id=platform.id, name=platform.name, domains=list(platform.domains), status=status,  # type: ignore[arg-type]
+            enabled=accepted, note=note, region=platform.region,
+        ))
+    return schemas.PlatformsResponse(mode=services.settings.source_policy, platforms=items)
+
+
+def admin_platform(platform: Platform, services: Services) -> schemas.AdminPlatform:
+    check = platform.check
+    return schemas.AdminPlatform(
+        id=platform.id, name=platform.name, domains=list(platform.domains), builtin=platform.builtin,
+        expected=platform.declared, note=platform.note, region=platform.region, status=platform.status,
+        enabled=platform.enabled, active=_accepts(platform, services), can_enable=platform.can_enable,
+        checking=platform.checking,
+        check=schemas.AdminCheck(**asdict(check)) if check else None,
+        requests_ok=platform.stats["ok"], requests_failed=platform.stats["failed"],
+    )
+
+
+def admin_platforms_response(services: Services) -> schemas.AdminPlatformsResponse:
+    platforms = services.platforms.all()
+    return schemas.AdminPlatformsResponse(
+        mode=services.settings.source_policy, persistent=services.platforms.persistent,
+        platforms=[admin_platform(platform, services) for platform in platforms],
+    )
+
+
+def admin_overview(services: Services) -> schemas.AdminOverview:
+    settings = services.settings
+    counts: dict[str, int] = dict.fromkeys(STATUSES, 0)
+    for platform in services.platforms.all():
+        counts[platform.status] += 1
+    counts["enabled"] = sum(1 for platform in services.platforms.all() if _accepts(platform, services))
+    return schemas.AdminOverview(
+        version=__version__, extractor_version=services.extractor_version, ffmpeg=services.ffmpeg_version,
+        environment=settings.environment, mode=settings.source_policy,
+        max_file_size_bytes=settings.max_file_size_bytes, max_concurrent_jobs=settings.max_concurrent_jobs,
+        file_ttl_seconds=settings.file_ttl_seconds,
+        running_jobs=services.jobs.count(JobStatus.RUNNING), queued_jobs=services.jobs.count(JobStatus.QUEUED),
+        kept_files=services.jobs.count(JobStatus.COMPLETED),
+        uptime_seconds=int(time.monotonic() - services.started_at),
+        disk=schemas.AdminDisk(
+            free_bytes=services.storage.free_bytes(), total_bytes=services.storage.total_bytes(),
+            used_bytes=services.storage.used_bytes(), reserved_bytes=services.jobs.reserved_bytes(),
+            floor_bytes=settings.min_free_disk_bytes, budget_bytes=settings.storage_budget_bytes,
+        ),
+        counts=counts,
+        persistent=services.platforms.persistent and services.admin.persistent,
+        errors=[schemas.AdminErrorEntry(**entry) for entry in reversed(services.errors)],
+    )
+
+
+def admin_session(services: Services, session: Session, token: str | None = None) -> schemas.AdminSession:
+    return schemas.AdminSession(
+        email=services.admin.email or "", must_change_password=session.must_change_password,
+        expires_in=max(0, int(services.admin.expires_at(session) - time.time())), token=token,
+        persistent=services.admin.persistent,
     )

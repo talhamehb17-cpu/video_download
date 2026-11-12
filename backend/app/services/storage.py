@@ -60,6 +60,29 @@ class TempStorage:
         except OSError:
             return 0
 
+    def total_bytes(self) -> int:
+        try:
+            return shutil.disk_usage(self.root).total
+        except OSError:
+            return 0
+
+    @staticmethod
+    def size_of(directory: Path | None) -> int:
+        """Bytes currently held by one job or analysis directory."""
+        if directory is None:
+            return 0
+        total = 0
+        try:
+            for item in directory.rglob("*"):
+                try:
+                    if item.is_file():
+                        total += item.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            return total
+        return total
+
     def used_bytes(self) -> int:
         total = 0
         for item in self.root.rglob("*"):

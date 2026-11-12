@@ -281,7 +281,9 @@ def test_client_identity() -> None:
 # ------------------------------------------------------------------------------- config
 def test_settings_defaults_and_parsing(tmp_path: object) -> None:
     settings = Settings(_env_file=None)
-    assert settings.source_policy == "allowlist"
+    assert settings.source_policy == "platforms" and settings.max_file_size_mb == 1536
+    assert settings.min_free_disk_mb == 1024 and settings.storage_budget_bytes is None
+    assert settings.admin_configured is False
     assert settings.allowed_domains == list(DEFAULT_ALLOWED_DOMAINS)
     assert settings.allowed_ports == [80, 443] and settings.unsafe_allow_hosts == []
     parsed = Settings(

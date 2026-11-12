@@ -13,6 +13,7 @@ import logging
 import secrets
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -83,6 +84,7 @@ class Job:
     file_size: int | None = None
     container: str | None = None
     error: AppError | None = None
+    reserved_bytes: int = 0   # disk space set aside for this job while it is queued or running
     embedded_subtitles: list[str] = field(default_factory=list)
     notices: list[str] = field(default_factory=list)
     downloads: int = 0
@@ -94,10 +96,14 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, settings: Settings, storage: TempStorage, ffmpeg_path: str | None) -> None:
+    def __init__(
+        self, settings: Settings, storage: TempStorage, ffmpeg_path: str | None,
+        on_failure: Callable[[str, AppError], None] | None = None,
+    ) -> None:
         self._settings = settings
         self._storage = storage
         self._ffmpeg_path = ffmpeg_path
+        self._on_failure = on_failure
         self._jobs: dict[str, Job] = {}
         self._slots = asyncio.Semaphore(settings.max_concurrent_jobs)
 
@@ -110,6 +116,41 @@ class JobManager:
 
     def count(self, *statuses: JobStatus) -> int:
         return sum(1 for job in self._jobs.values() if job.status in statuses)
+
+    # ------------------------------------------------------------------ disk space
+    def space_needed(self, quality: QualityChoice, embedding: bool) -> int:
+        """Worst-case disk space a download of ``quality`` needs while it is being prepared.
+
+        Parts are downloaded first and then merged into a new file, so for a moment
+        both exist. Embedding subtitles writes the file once more. When the source
+        doesn't say how large a format is, the size limit is assumed.
+        """
+        limit = self._settings.max_file_size_bytes
+        size = min(quality.size, limit) if quality.size else limit
+        if quality.size and quality.size_is_estimate:
+            size = min(limit, int(size * 1.15))
+        rewritten = quality.requires_merge or embedding
+        return int(size * (2.0 if rewritten else 1.05)) + 16 * 1024 * 1024
+
+    def reserved_bytes(self) -> int:
+        """Space promised to queued and running jobs that they have not written yet."""
+        return sum(
+            max(0, job.reserved_bytes - self._storage.size_of(job.directory))
+            for job in self._jobs.values() if job.status in ACTIVE
+        )
+
+    def _check_space(self, needed: int) -> None:
+        reserved = self.reserved_bytes()
+        available = self._storage.free_bytes() - self._settings.min_free_disk_bytes - reserved
+        budget = self._settings.storage_budget_bytes
+        if budget is not None:
+            available = min(available, budget - self._storage.used_bytes() - reserved)
+        if needed > available:
+            log.warning("job refused: needs %d MB, %d MB can be used (free %d MB, floor %d MB, reserved %d MB)",
+                        needed >> 20, max(0, available) >> 20, self._storage.free_bytes() >> 20,
+                        self._settings.min_free_disk_mb, reserved >> 20)
+            waiting = self.count(*ACTIVE) > 0 or self.count(JobStatus.COMPLETED) > 0
+            raise AppError("insufficient_storage", retry_after=120 if waiting else None)
 
     def queue_position(self, job: Job) -> int | None:
         if job.status is not JobStatus.QUEUED:
@@ -134,8 +175,8 @@ class JobManager:
             raise AppError("too_many_jobs")
         if self.count(JobStatus.QUEUED) >= self._settings.max_queued_jobs:
             raise AppError("server_busy", retry_after=30)
-        if self._storage.free_bytes() < self._settings.min_free_disk_mb * 1024 * 1024:
-            raise AppError("storage_full", retry_after=60)
+        needed = self.space_needed(quality, bool(embed))
+        self._check_space(needed)
 
         job_id = secrets.token_urlsafe(18)
         directory = self._storage.create("jobs", job_id)
@@ -151,6 +192,7 @@ class JobManager:
             embed=list(embed),
             directory=directory,
             created_at=time.time(),
+            reserved_bytes=needed,
         )
         self._jobs[job_id] = job
         job.task = asyncio.create_task(self._run(job), name=f"job-{job_id[:6]}")
@@ -254,6 +296,8 @@ class JobManager:
             return
         job.error = error
         self._close(job, JobStatus.FAILED)
+        if self._on_failure is not None:
+            self._on_failure(job.domain, error)
         log.info("job failed id=%s code=%s detail=%s", job.id[:6], error.code, (error.detail or "")[:400])
 
     def _close(self, job: Job, status: JobStatus) -> None:

@@ -16,8 +16,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin lumora \
-    && mkdir -p /var/tmp/lumora-media \
-    && chown lumora:lumora /var/tmp/lumora-media
+    && mkdir -p /var/tmp/lumora-media /srv/data \
+    && chown lumora:lumora /var/tmp/lumora-media /srv/data \
+    && chmod 700 /srv/data
+
+# The administrator account and the platform settings. Mount a volume here so they
+# survive a new container: --volume lumora-data:/srv/data
+ENV DATA_DIR=/srv/data
+VOLUME /srv/data
 
 WORKDIR /srv/app
 COPY requirements.txt .

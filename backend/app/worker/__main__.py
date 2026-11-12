@@ -26,7 +26,7 @@ def main() -> int:
 
     try:
         task = json.loads(sys.stdin.read())
-        if not isinstance(task, dict) or task.get("task") not in ("analyze", "download", "subtitle"):
+        if not isinstance(task, dict) or task.get("task") not in ("analyze", "download", "subtitle", "compat"):
             raise ValueError("unknown task")
     except Exception as exc:
         emit({"event": "error", "code": "internal_error", "detail": f"bad task: {exc}"})

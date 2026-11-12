@@ -34,9 +34,7 @@ services:
 
       # Which sources are served. See "Source policy" in the README before changing this.
       - key: SOURCE_POLICY
-        value: allowlist
-      - key: ALLOWED_DOMAINS
-        value: archive.org,wikimedia.org,media.ccc.de,nasa.gov,blender.org
+        value: platforms
 
       # Cautious limits for the free instance. Measured against the sample source,
       # the API used about 55 MB and each download or analysis 55 to 80 MB; real

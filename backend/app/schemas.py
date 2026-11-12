@@ -52,6 +52,7 @@ class Notice(BaseModel):
 class Source(BaseModel):
     domain: str
     extractor: str
+    platform: str | None = None  # display name of the platform, when it is a known one
 
 
 class Quality(BaseModel):
@@ -156,9 +157,29 @@ class Example(BaseModel):
 
 
 class SourcePolicyInfo(BaseModel):
-    mode: Literal["open", "allowlist"]
+    mode: Literal["platforms", "open", "allowlist"]
     domains: list[str]
     examples: list[Example]
+
+
+PublicStatus = Literal["supported", "partial", "unsupported"]
+
+
+class PlatformInfo(BaseModel):
+    """One platform as visitors see it."""
+
+    id: str
+    name: str
+    domains: list[str] = Field(description="Addresses of the platform. 'name.*' also covers country versions.")
+    status: PublicStatus
+    enabled: bool = Field(description="Links from this platform are accepted right now.")
+    note: str | None = None
+    region: str
+
+
+class PlatformsResponse(BaseModel):
+    mode: Literal["platforms", "open", "allowlist"]
+    platforms: list[PlatformInfo]
 
 
 class ConfigResponse(BaseModel):
@@ -176,3 +197,117 @@ class HealthResponse(BaseModel):
     active_jobs: int
     queued_jobs: int
     uptime_seconds: int
+
+
+# ------------------------------------------------------------------------------ admin
+class AdminLoginRequest(RequestModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AdminPasswordRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class AdminSession(BaseModel):
+    email: str
+    must_change_password: bool
+    expires_in: int
+    token: str | None = Field(default=None, description="Only present right after signing in or changing the password.")
+    persistent: bool = Field(description="False when the server cannot save the account to disk.")
+
+
+AdminStatus = Literal["supported", "partial", "unsupported", "requires_review"]
+
+
+class AdminCheck(BaseModel):
+    at: float
+    status: AdminStatus
+    summary: str
+    method: Literal["extractor", "generic", "none"]
+    extractor: str | None = None
+    url: str | None = None
+    title: str | None = None
+    qualities: int = 0
+    max_height: int | None = None
+    subtitles: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
+    seconds: float | None = None
+
+
+class AdminPlatform(BaseModel):
+    id: str
+    name: str
+    domains: list[str]
+    builtin: bool
+    expected: Literal["full", "partial", "unsupported"] | None
+    note: str | None
+    region: str
+    status: AdminStatus
+    enabled: bool
+    active: bool
+    can_enable: bool
+    checking: bool
+    check: AdminCheck | None
+    requests_ok: int
+    requests_failed: int
+
+
+class AdminPlatformsResponse(BaseModel):
+    mode: Literal["platforms", "open", "allowlist"]
+    persistent: bool
+    platforms: list[AdminPlatform]
+
+
+class AdminPlatformCreate(RequestModel):
+    target: str = Field(min_length=3, max_length=2048, description="A domain or a link to a video page.")
+    name: str | None = Field(default=None, max_length=60)
+
+
+class AdminPlatformUpdate(RequestModel):
+    enabled: bool
+
+
+class AdminCheckRequest(RequestModel):
+    url: str | None = Field(default=None, max_length=2048, description="Link to test. Empty = sample links.")
+
+
+class AdminErrorEntry(BaseModel):
+    at: float
+    stage: Literal["analyze", "download"]
+    domain: str
+    platform: str | None
+    code: str
+    message: str
+
+
+class AdminDisk(BaseModel):
+    free_bytes: int
+    total_bytes: int
+    used_bytes: int
+    reserved_bytes: int
+    floor_bytes: int
+    budget_bytes: int | None
+
+
+class AdminOverview(BaseModel):
+    version: str
+    extractor_version: str
+    ffmpeg: str | None
+    environment: str
+    mode: Literal["platforms", "open", "allowlist"]
+    max_file_size_bytes: int
+    max_concurrent_jobs: int
+    file_ttl_seconds: int
+    running_jobs: int
+    queued_jobs: int
+    kept_files: int
+    uptime_seconds: int
+    disk: AdminDisk
+    counts: dict[str, int]
+    persistent: bool
+    errors: list[AdminErrorEntry]

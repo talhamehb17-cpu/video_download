@@ -66,6 +66,7 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "environment": "test",
         "log_level": "WARNING",
         "storage_dir": tmp_path / "storage",
+        "data_dir": tmp_path / "data",
         "allowed_origins": ["http://localhost:5173"],
         "rate_limit_enabled": False,
         "cleanup_interval_seconds": 3600,

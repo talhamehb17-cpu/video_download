@@ -12,17 +12,18 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.security.network import parse_host_port_list, parse_ip
 
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 CsvList = Annotated[list[str], NoDecode]
 ExampleLink = tuple[str, str, str]  # label, source name, URL
 
 # Sources that publish their media for download and reuse (public-domain or openly
 # licensed) and that work without signing in or circumventing anything. This is the
-# default allow list; operators can replace or extend it with ALLOWED_DOMAINS.
+# list used by SOURCE_POLICY=allowlist unless ALLOWED_DOMAINS replaces it.
 DEFAULT_ALLOWED_DOMAINS = (
     "archive.org",       # Internet Archive
     "wikimedia.org",     # Wikimedia Commons
@@ -77,14 +78,22 @@ class Settings(BaseSettings):
 
     # --- Storage & retention -----------------------------------------------------
     storage_dir: Path = Path(tempfile.gettempdir()) / "lumora-media"
+    # Small files that must survive a restart: the administrator account and the
+    # platform settings. Never inside STORAGE_DIR, which is wiped at every start.
+    data_dir: Path = BACKEND_ROOT / "data"
     file_ttl_seconds: int = Field(default=1800, ge=60)
     analysis_ttl_seconds: int = Field(default=1800, ge=60)
     job_record_ttl_seconds: int = Field(default=3600, ge=60)
     cleanup_interval_seconds: int = Field(default=30, ge=1)
-    min_free_disk_mb: int = Field(default=512, ge=0)
+    # Space on the storage volume that Lumora never touches: no download starts,
+    # and a running one stops, before free space would fall below it.
+    min_free_disk_mb: int = Field(default=1024, ge=0)
+    # Most space Lumora may occupy with downloads in progress and finished files
+    # together. 0 = only the free-space floor above applies.
+    storage_budget_mb: int = Field(default=0, ge=0)
 
     # --- Processing limits -------------------------------------------------------
-    max_file_size_mb: int = Field(default=2048, ge=1)
+    max_file_size_mb: int = Field(default=1536, ge=1)
     max_duration_seconds: int = Field(default=4 * 3600, ge=1)
     max_concurrent_jobs: int = Field(default=2, ge=1, le=32)
     max_concurrent_light_tasks: int = Field(default=4, ge=1, le=64)
@@ -102,12 +111,31 @@ class Settings(BaseSettings):
     rate_limit_status: str = "600/minute"
     rate_limit_files: str = "60/minute"
     rate_limit_default: str = "240/minute"
+    rate_limit_admin_login: str = "10/minute"
+    rate_limit_admin: str = "240/minute"
+
+    # --- Administrator --------------------------------------------------------------
+    # The account is created from these two values the first time the service
+    # starts. The password only works until it has been changed after the first
+    # sign-in; from then on the stored (hashed) password counts. Leave either one
+    # empty and the admin panel stays switched off.
+    admin_email: str | None = None
+    admin_bootstrap_password: SecretStr | None = None
+    admin_session_minutes: int = Field(default=30, ge=5, le=1440)       # ends after this long without a request
+    admin_session_max_hours: int = Field(default=12, ge=1, le=168)      # ends after this long in any case
+    admin_max_failed_logins: int = Field(default=5, ge=3, le=50)        # then sign-in is paused, longer each time
+    admin_check_timeout_seconds: int = Field(default=60, ge=10, le=300)
 
     # --- Source policy -----------------------------------------------------------
-    # "allowlist" (default): only ALLOWED_DOMAINS and their sub-domains.
-    # "open": every public source the extractor supports, minus BLOCKED_DOMAINS. The
-    #         operator is then responsible for only serving sources that permit it.
-    source_policy: Literal["open", "allowlist"] = "allowlist"
+    # "platforms" (default): links from the platforms that are switched on, i.e. the
+    #         built-in catalog plus websites the administrator added and approved.
+    # "allowlist": only ALLOWED_DOMAINS and their sub-domains; the admin panel's
+    #         switches have no effect.
+    # "open": every public source the extractor supports, minus BLOCKED_DOMAINS and
+    #         platforms the administrator switched off.
+    # Whatever the mode, the operator is responsible for only serving sources that
+    # permit it.
+    source_policy: Literal["platforms", "open", "allowlist"] = "platforms"
     allowed_domains: CsvList = Field(default_factory=lambda: list(DEFAULT_ALLOWED_DOMAINS))
     blocked_domains: CsvList = Field(default_factory=list)
     block_age_restricted: bool = True
@@ -164,13 +192,27 @@ class Settings(BaseSettings):
     def _normalise_domains(cls, value: list[str]) -> list[str]:
         return [d.lower().lstrip("*").strip(".") for d in value if d.strip(".* ")]
 
-    @field_validator("client_ip_header", "allowed_origin_regex", "ffmpeg_path", mode="before")
+    @field_validator(
+        "client_ip_header", "allowed_origin_regex", "ffmpeg_path", "admin_email", "admin_bootstrap_password",
+        mode="before",
+    )
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
 
+    @field_validator("admin_email")
+    @classmethod
+    def _normalise_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        email = value.strip().lower()
+        if not re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s.]{2,}", email):
+            raise ValueError("ADMIN_EMAIL must be an e-mail address")
+        return email
+
     @field_validator(
-        "rate_limit_analyze", "rate_limit_jobs", "rate_limit_status", "rate_limit_files", "rate_limit_default"
+        "rate_limit_analyze", "rate_limit_jobs", "rate_limit_status", "rate_limit_files", "rate_limit_default",
+        "rate_limit_admin_login", "rate_limit_admin",
     )
     @classmethod
     def _check_rate(cls, value: str) -> str:
@@ -199,6 +241,18 @@ class Settings(BaseSettings):
     @property
     def max_file_size_bytes(self) -> int:
         return self.max_file_size_mb * 1024 * 1024
+
+    @property
+    def min_free_disk_bytes(self) -> int:
+        return self.min_free_disk_mb * 1024 * 1024
+
+    @property
+    def storage_budget_bytes(self) -> int | None:
+        return self.storage_budget_mb * 1024 * 1024 or None
+
+    @property
+    def admin_configured(self) -> bool:
+        return bool(self.admin_email and self.admin_bootstrap_password)
 
     @property
     def unsafe_allow_pairs(self) -> frozenset[tuple[str, int]]:

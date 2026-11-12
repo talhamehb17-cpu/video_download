@@ -18,10 +18,11 @@ from __future__ import annotations
 import asyncio
 import re
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from app.errors import AppError
+from app.platforms.registry import PlatformRegistry
 from app.security.network import all_public, is_internal_hostname, is_public_ip, parse_ip
 
 MAX_URL_LENGTH = 2048
@@ -42,11 +43,20 @@ class ValidatedUrl:
 
 @dataclass(frozen=True)
 class SourcePolicy:
-    mode: str = "open"                       # "open" | "allowlist"
+    """Which websites a link may point to.
+
+    In order: the operator's block list always wins; a platform that cannot work
+    within the rules (DRM) is always declined; then the mode decides -
+    ``allowlist`` (only the listed domains), ``platforms`` (only platforms that are
+    switched on) or ``open`` (everything except platforms that were switched off).
+    """
+
+    mode: str = "open"                       # "platforms" | "open" | "allowlist"
     allowed_domains: tuple[str, ...] = ()
     blocked_domains: tuple[str, ...] = ()
     allowed_ports: frozenset[int] = frozenset({80, 443})
     exempt: frozenset[tuple[str, int]] = frozenset()
+    platforms: PlatformRegistry | None = field(default=None, compare=False)
 
     def is_exempt(self, host: str, port: int) -> bool:
         return (host.lower().strip("[]"), port) in self.exempt
@@ -56,8 +66,26 @@ class SourcePolicy:
         name = host.lower().rstrip(".")
         if domain_matches(name, self.blocked_domains):
             raise AppError("domain_not_allowed")
-        if self.mode == "allowlist" and not domain_matches(name, self.allowed_domains):
-            raise AppError("domain_not_allowed")
+        platform = self.platforms.match(name) if self.platforms is not None else None
+        if platform is not None and platform.declared == "unsupported":
+            raise AppError("platform_unsupported", message=f"{platform.name} videos can't be downloaded.",
+                           hint=platform.note)
+        if self.mode == "allowlist":
+            if not domain_matches(name, self.allowed_domains):
+                raise AppError("domain_not_allowed")
+            return
+        if platform is None:
+            if self.mode == "platforms":
+                raise AppError("domain_not_allowed")
+            return
+        if not platform.active:
+            if not platform.builtin and self.mode == "platforms":
+                # A website the administrator is still reviewing looks like any other unlisted one.
+                raise AppError("domain_not_allowed")
+            if platform.status == "unsupported":
+                raise AppError("platform_unsupported", message=f"{platform.name} doesn't work with this service.",
+                               hint="A compatibility check found nothing that can be downloaded.")
+            raise AppError("platform_disabled", message=f"{platform.name} is switched off on this service.")
 
 
 def domain_matches(host: str, domains: tuple[str, ...] | list[str]) -> bool:
