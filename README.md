@@ -89,6 +89,21 @@ to understand:
   service, and often copyright law, unless you own the content or have permission. Switch off what you do not
   want to offer, or use an allow list.
 
+**What the project's own check saw.** CI runs the admin panel's check for every platform that is switched on,
+from a GitHub-hosted runner, which has a data-centre address in the United States. On 12 November 2026:
+
+| Outcome | Platforms |
+| --- | --- |
+| Gave a public video without signing in (31) | 9GAG, AcFun, Bilibili, BitChute, Bluesky, Coub, Dailymotion, Facebook, Flickr, Imgur, Instagram, Internet Archive, Kick, LinkedIn, Loom, media.ccc.de, Niconico, Odysee, OK.ru, Pinterest, Rutube, Streamable, TED, Tencent Video, TikTok, Twitch, Vimeo, VK Video, Weibo, Wikimedia Commons, X (Twitter) |
+| Turned the runner away (4) | YouTube (asked it to prove it is not a robot), Reddit (asked it to sign in), Rumble (refused the request), Tumblr (closed the connection) |
+| Sample links could not be read (6) | FC2 Video, Kakao TV, Likee, Naver TV, Snapchat, Youku |
+| Nothing to test with (3) | Blender and NASA (no sample links), NHK World (its sample programmes have expired) |
+
+One video was read per platform and nothing was downloaded. This is what one machine saw on one day: your
+server has a different address, and platforms change. The weekly run under **Actions > CI > Real public
+sources** shows the current picture, and "Check everything that is switched on" in the admin panel shows
+yours.
+
 The policy is set with environment variables on the API:
 
 | Setting | Effect |
