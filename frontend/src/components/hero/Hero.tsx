@@ -5,7 +5,7 @@ import type { ReactNode, RefObject } from 'react'
 import type { ServiceState } from '../../hooks/useServiceStatus'
 import { formatSpan } from '../../lib/format'
 import { Link } from '../../lib/Link'
-import { detect, featured, summarise } from '../../lib/platforms'
+import { detect, featured, namesPlatforms, summarise } from '../../lib/platforms'
 import { listSources } from '../../lib/site'
 import { ServicePill } from './ServicePill'
 import { UrlForm } from './UrlForm'
@@ -101,8 +101,9 @@ export function Hero({ service, onRetryService, url, onUrlChange, onSubmit, busy
       </h1>
 
       <m.p {...fade(0.5)} className="mx-auto mt-6 max-w-xl text-[17px] leading-relaxed text-ink-soft sm:text-lg">
-        Paste a link. Lumora recognises the platform, reads what it really offers and prepares a clean download, with
-        subtitles, in the quality you choose.
+        {namesPlatforms(platforms)
+          ? 'Paste a link. Lumora recognises the platform, reads what it really offers and prepares a clean download, with subtitles, in the quality you choose.'
+          : 'Paste a link. Lumora reads what the source really offers and prepares a clean download, with subtitles, in the quality you choose.'}
       </m.p>
 
       <m.div {...fade(0.62)} className="mx-auto mt-9 max-w-3xl">

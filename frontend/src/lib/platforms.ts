@@ -110,6 +110,15 @@ export function platformsFromDomains(mode: PlatformList['mode'], domains: readon
   }
 }
 
+/**
+ * False only when the service is connected and names no platform at all: an API from
+ * before the platform list existed that accepts every website. The site then has
+ * nothing to recognise a link by, and must not say that it does.
+ */
+export function namesPlatforms(list: PlatformList | null): boolean {
+  return list === null || list.platforms.length > 0
+}
+
 export const STATUS_LABEL: Record<PlatformStatus, string> = {
   supported: 'Supported',
   partial: 'Partially supported',

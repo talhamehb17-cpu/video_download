@@ -692,13 +692,18 @@ def compat(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
     fallback = task.get("fallback_url") if isinstance(task.get("fallback_url"), str) else None
     integrations, samples = find_integrations([str(d) for d in task.get("domains") or []], url)
     attempts: list[dict[str, Any]] = []
-    # A link the administrator gave; else the integration's own sample links; else
-    # the link that an earlier check of this website used.
-    for link in ([url] if url else samples or ([fallback] if fallback else [])):
+    # A link the administrator gave. Without one: the link that the previous check
+    # of this website used (what worked then should work now), then the
+    # integration's own sample links.
+    links = [url] if url else list(dict.fromkeys(([fallback] if fallback else []) + samples))[:MAX_SAMPLE_LINKS]
+    for link in links:
         attempts.append(_try_link(task, link))
         if attempts[-1]["ok"]:
             break
-    return {"integrations": integrations, "attempts": attempts, "sample_links": bool(not url and samples)}
+    return {
+        "integrations": integrations, "attempts": attempts, "sample_links": bool(not url and samples),
+        "previous_link": bool(not url and fallback and fallback not in samples),
+    }
 
 
 TASKS: dict[str, tuple[Callable[[dict[str, Any], Emit, _Log], dict[str, Any]], str]] = {

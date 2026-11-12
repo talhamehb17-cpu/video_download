@@ -12,9 +12,10 @@ of four states:
   video on a website that is not in the catalog, or the platform turned this
   server away.
 
-A check that had no link to test, or that could not be completed, is recorded as
-not conclusive: the administrator sees why, and the status stays what it was
-going to be without it.
+A check that learned nothing about the website is recorded as not conclusive:
+there was no link to test, the video behind the link no longer exists, or the
+check could not be completed. The administrator sees why, and the status stays
+what it was going to be without it.
 
 Adding or checking a website never switches it on. That is a separate decision.
 """
@@ -109,12 +110,14 @@ def interpret(
     code = max(dict.fromkeys(codes), key=codes.count)
     shown = attempts[codes.index(code)]
     base |= {"url": str(shown.get("url")), "error_code": code, "error_message": _message(code)}
-    if given_url or not result.get("sample_links", True):
+    # "Sample links" only when every link was one: the link of an earlier check may be among them.
+    noun = "sample link" if result.get("sample_links", True) and not result.get("previous_link") else "link"
+    if given_url or (len(attempts) == 1 and noun == "link"):
         tried = "the link"
     elif codes.count(code) == len(attempts):
-        tried = f"{len(attempts)} sample link{'s' if len(attempts) != 1 else ''}"
+        tried = f"{len(attempts)} {noun}{'s' if len(attempts) != 1 else ''}"
     else:
-        tried = f"{codes.count(code)} of {len(attempts)} sample links"
+        tried = f"{codes.count(code)} of {len(attempts)} {noun}s"
     if code == "drm_protected":
         return CheckResult(status="unsupported", summary="The video is DRM-protected. Lumora never circumvents DRM.",
                            **base)
@@ -130,7 +133,8 @@ def interpret(
             "Try another public link. If every link ends like this, the platform doesn't work from this server."
         ), **base)
     if code == "not_found":
-        return CheckResult(status="requires_review", summary=(
+        # A video that is gone says nothing about the platform: nothing was learned.
+        return CheckResult(status="requires_review", conclusive=False, summary=(
             f"The video behind {tried} no longer exists. Paste a link to a current public video."
         ), **base)
     return CheckResult(status="requires_review", summary=(
@@ -196,8 +200,8 @@ class CompatibilityChecker:
         started = time.monotonic()
         self._serial += 1
         directory = self._storage.create("analyses", f"check-{self._serial:06d}-{int(time.time())}")
-        # Without a link the worker tries the integration's sample links. Where there
-        # are none, the link of the previous check is the best thing to test again.
+        # Without a link the worker reads the link of the previous check again, then
+        # the integration's own sample links.
         previous = previous_link(platform) if url is None else None
         try:
             async with self._slots:

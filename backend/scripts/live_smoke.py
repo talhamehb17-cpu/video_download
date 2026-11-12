@@ -162,7 +162,7 @@ async def survey(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 OUTCOMES = {
     "read": "read a public video",
     "refused": "turned away, or the sample links failed",
-    "untested": "nothing to test with",
+    "untested": "no usable sample link",
     "unsupported": "unsupported",
     "unfinished": "not finished",
 }
@@ -219,7 +219,7 @@ def survey_report(platforms: list[dict[str, Any]], attempts: dict[str, list[str]
     headline = (
         f"{len(groups['read'])} of {len(platforms)} platforms gave a public video to this machine without signing in; "
         f"{len(groups['refused'])} turned it away or their sample links failed, "
-        f"{len(groups['untested'])} had nothing to test with, "
+        f"{len(groups['untested'])} had no sample link or only links to videos that are gone, "
         f"{len(groups['unsupported'])} unsupported, {len(groups['unfinished'])} not finished"
     )
     print(f"\nPlatform survey: {headline}\n{table}")

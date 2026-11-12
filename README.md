@@ -69,12 +69,12 @@ Each one has a status, shown to visitors on the site and under the link field:
 | --- | --- |
 | **Supported** | Public videos are expected to work in full. |
 | **Partially supported** | Public videos work within limits that the site names: fewer qualities, public posts only, or a platform that often turns servers away. |
-| **Unsupported** | Never possible: the service uses DRM or needs an account for everything (Netflix, Disney+, Prime Video, Spotify and others). These cannot be switched on. |
+| **Unsupported** | Never possible within Lumora's rules: the service uses DRM, needs an account for everything, or needs browser cookies for every video (Netflix, Disney+, Prime Video, Spotify, Douyin and others). These cannot be switched on. |
 | **Requires review** | Only in the admin panel: a website you added that has no dedicated integration, or a check that did not get a video. A person decides. |
 
 ![The platform list on the website](docs/platforms.jpg)
 
-Out of the box 46 platforms are switched on and 11 are unsupported. Two things about that list are important
+Out of the box 44 platforms are switched on and 13 are unsupported. Two things about that list are important
 to understand:
 
 - **The catalog is an expectation, not a promise.** Whether a platform works depends on the network address of
@@ -291,7 +291,7 @@ Version 1.1 added the platform list and the admin panel. When updating from 1.0,
 
 | Setting | What to do |
 | --- | --- |
-| `SOURCE_POLICY` | Set it to `platforms`, or remove the line. If it still says `allowlist`, only `ALLOWED_DOMAINS` are accepted and the admin panel's switches do nothing. |
+| `SOURCE_POLICY` | Set it to `platforms`, or remove the line. If it still says `allowlist`, only `ALLOWED_DOMAINS` are accepted and the admin panel's switches do nothing. If it says `open`, every website the reader knows stays accepted, the site cannot tell visitors in advance what will work, and the admin panel can only switch platforms off. |
 | `MAX_FILE_SIZE_MB` | The default is now `1536` (1.5 GB). A line with an older value keeps the older limit: change or remove it. |
 | `DATA_DIR` | New. Create a folder only the service's user can read (`sudo install -d -m 700 -o <user> -g <user> /var/lib/lumora`) and point this to it. |
 | `ADMIN_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | New. Both must be set for the admin panel to exist. |

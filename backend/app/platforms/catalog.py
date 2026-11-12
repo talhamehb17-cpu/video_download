@@ -11,6 +11,10 @@ It is a starting point, not a promise: platforms change, and many of them treat
 servers differently from home connections. The admin panel's compatibility check
 replaces the expectation with what was actually observed.
 
+``full`` is kept for platforms that gave a public video to the project's own
+survey (``scripts/live_smoke.py --survey``, run from a GitHub-hosted runner). A
+platform that turned that run away, or whose reader failed, is ``partial`` at most.
+
 ``domains`` entries match the name itself and its sub-domains. An entry ending in
 ``.*`` (``pinterest.*``) also matches country versions (``pinterest.co.uk``).
 """
@@ -36,6 +40,7 @@ class CatalogEntry:
 
 _LOGIN = "Only public posts. This platform often asks servers to sign in, which Lumora never does."
 _DRM = "Protected with DRM. Lumora never circumvents DRM."
+_COOKIES = "Needs browser cookies for every video, which Lumora never uses."
 
 CATALOG: tuple[CatalogEntry, ...] = (
     # --- sources that publish their videos for download and reuse -------------------
@@ -64,7 +69,7 @@ CATALOG: tuple[CatalogEntry, ...] = (
     CatalogEntry("twitch", "Twitch", ("twitch.tv",), "partial",
                  "Clips and past broadcasts. Live streams and subscriber-only videos are declined."),
     CatalogEntry("kick", "Kick", ("kick.com",), "partial", "Clips and past broadcasts. Live streams are declined."),
-    CatalogEntry("rumble", "Rumble", ("rumble.com",)),
+    CatalogEntry("rumble", "Rumble", ("rumble.com",), "partial", "Public videos. Rumble often turns servers away."),
     CatalogEntry("odysee", "Odysee", ("odysee.com", "lbry.tv")),
     CatalogEntry("bitchute", "BitChute", ("bitchute.com",)),
     CatalogEntry("streamable", "Streamable", ("streamable.com",)),
@@ -78,7 +83,7 @@ CATALOG: tuple[CatalogEntry, ...] = (
     CatalogEntry("flickr", "Flickr", ("flickr.com", "flic.kr"), "partial", "Video posts only."),
     CatalogEntry("9gag", "9GAG", ("9gag.com",), "partial", "Video posts only."),
     CatalogEntry("coub", "Coub", ("coub.com",)),
-    CatalogEntry("likee", "Likee", ("likee.video",)),
+    CatalogEntry("likee", "Likee", ("likee.video",), "partial", "Public videos. Links often cannot be read."),
     # --- Japan --------------------------------------------------------------------------
     CatalogEntry("niconico", "Niconico", ("nicovideo.jp", "nico.ms"), "partial",
                  "Public videos. Many need a Niconico account and are declined.", "japan"),
@@ -90,11 +95,9 @@ CATALOG: tuple[CatalogEntry, ...] = (
     # --- China ------------------------------------------------------------------------------
     CatalogEntry("bilibili", "Bilibili", ("bilibili.com", "b23.tv", "bilibili.tv"), "partial",
                  "Public videos in the qualities offered without an account.", "china"),
-    CatalogEntry("douyin", "Douyin", ("douyin.com",), "partial",
-                 "Public videos. Douyin usually blocks servers outside China.", "china"),
+    CatalogEntry("douyin", "Douyin", ("douyin.com",), "unsupported", _COOKIES, "china"),
     CatalogEntry("weibo", "Weibo", ("weibo.com", "weibo.cn"), "partial", _LOGIN, "china"),
-    CatalogEntry("xigua", "Xigua Video", ("ixigua.com",), "partial",
-                 "Public videos. Usually blocks servers outside China.", "china"),
+    CatalogEntry("xigua", "Xigua Video", ("ixigua.com",), "unsupported", _COOKIES, "china"),
     CatalogEntry("acfun", "AcFun", ("acfun.cn",), region="china"),
     CatalogEntry("youku", "Youku", ("youku.com",), "partial",
                  "Free videos only. Mostly limited to China.", "china"),
@@ -103,8 +106,10 @@ CATALOG: tuple[CatalogEntry, ...] = (
     CatalogEntry("iqiyi", "iQIYI", ("iqiyi.com", "iq.com"), "unsupported",
                  "Requires an account for almost everything and uses DRM.", "china"),
     # --- Korea, Russia ------------------------------------------------------------------------
-    CatalogEntry("naver", "Naver TV", ("tv.naver.com",), region="korea"),
-    CatalogEntry("kakao", "Kakao TV", ("tv.kakao.com",), region="korea"),
+    CatalogEntry("naver", "Naver TV", ("tv.naver.com",), "partial",
+                 "Public clips. Availability depends on the server's country.", "korea"),
+    CatalogEntry("kakao", "Kakao TV", ("tv.kakao.com",), "partial",
+                 "Public clips. Availability depends on the server's country.", "korea"),
     CatalogEntry("vk", "VK Video", ("vk.com", "vkvideo.ru", "vk.ru"), "partial", _LOGIN, "russia"),
     CatalogEntry("ok", "OK.ru", ("ok.ru",), region="russia"),
     CatalogEntry("rutube", "Rutube", ("rutube.ru",), region="russia"),

@@ -3,7 +3,7 @@ import { BadgeCheck, CircleAlert, CircleSlash, Search, type LucideIcon } from 'l
 import { useMemo, useState } from 'react'
 
 import { cn } from '../../lib/cn'
-import { STATUS_LABEL, featured, type Platform, type PlatformList, type PlatformStatus } from '../../lib/platforms'
+import { STATUS_LABEL, featured, namesPlatforms, type Platform, type PlatformList, type PlatformStatus } from '../../lib/platforms'
 import { Reveal } from '../ui/Reveal'
 import { SectionHeading } from './SectionHeading'
 
@@ -94,12 +94,19 @@ export function Platforms({ list }: { list: PlatformList | null }) {
   return (
     <section aria-labelledby="platforms-title" className="mx-auto max-w-6xl px-4 py-24 sm:px-6 sm:py-28">
       <div id="platforms" className="scroll-mt-24" />
-      <SectionHeading eyebrow="Platforms" id="platforms-title" title="Paste a link. Lumora knows where it’s from.">
-        The platform is recognised from the link itself, including short links and country versions. Each one is listed with
-        what you can honestly expect from it.
-      </SectionHeading>
+      {namesPlatforms(list) ? (
+        <SectionHeading eyebrow="Platforms" id="platforms-title" title="Paste a link. Lumora knows where it’s from.">
+          The platform is recognised from the link itself, including short links and country versions. Each one is listed with
+          what you can honestly expect from it.
+        </SectionHeading>
+      ) : (
+        <SectionHeading eyebrow="Platforms" id="platforms-title" title="Public videos from many websites.">
+          This download service accepts public video pages from a wide range of websites and does not publish a list of them.
+          Paste a link: if it can’t be processed, the message says why.
+        </SectionHeading>
+      )}
 
-      {list === null ? (
+      {!namesPlatforms(list) ? null : list === null ? (
         <Reveal className="mx-auto mt-12 max-w-xl text-center text-sm text-ink-mute">
           The list appears here as soon as the download service is connected.
         </Reveal>

@@ -4,14 +4,20 @@ import { ArrowDownToLine, ClipboardPaste, ScanSearch, SlidersHorizontal, type Lu
 import { Reveal } from '../ui/Reveal'
 import { SectionHeading } from './SectionHeading'
 
-const STEPS: Array<{ icon: LucideIcon; title: string; text: string }> = [
-  { icon: ClipboardPaste, title: 'Paste URL', text: 'Copy the address of a public video page and paste it into the field.' },
-  { icon: ScanSearch, title: 'Analyze', text: 'Lumora recognises the platform, checks the link and reads the title, preview, duration, qualities and subtitles.' },
-  { icon: SlidersHorizontal, title: 'Choose quality & subtitles', text: 'Pick a resolution and format, and decide which subtitle tracks you want.' },
-  { icon: ArrowDownToLine, title: 'Download', text: 'Watch the file being prepared, then save it. It is deleted from the server afterwards.' },
-]
+const READS = 'the link and reads the title, preview, duration, qualities and subtitles.'
 
-export function HowItWorks() {
+function steps(recognises: boolean): Array<{ icon: LucideIcon; title: string; text: string }> {
+  return [
+    { icon: ClipboardPaste, title: 'Paste URL', text: 'Copy the address of a public video page and paste it into the field.' },
+    { icon: ScanSearch, title: 'Analyze', text: recognises ? `Lumora recognises the platform, checks ${READS}` : `Lumora checks ${READS}` },
+    { icon: SlidersHorizontal, title: 'Choose quality & subtitles', text: 'Pick a resolution and format, and decide which subtitle tracks you want.' },
+    { icon: ArrowDownToLine, title: 'Download', text: 'Watch the file being prepared, then save it. It is deleted from the server afterwards.' },
+  ]
+}
+
+/** `recognises`: the service names its platforms, so a link can be recognised before it is sent. */
+export function HowItWorks({ recognises = true }: { recognises?: boolean }) {
+  const STEPS = steps(recognises)
   return (
     <section id="how-it-works" aria-labelledby="how-title" className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
       <SectionHeading id="how-title" eyebrow="How it works" title={<>From link to file in <span className="text-gradient font-serif font-normal italic">four steps.</span></>}>

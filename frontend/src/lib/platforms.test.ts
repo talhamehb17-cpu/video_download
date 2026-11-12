@@ -6,6 +6,7 @@ import {
   hostMatches,
   hostOf,
   matchPlatform,
+  namesPlatforms,
   platformsFromDomains,
   refusalFor,
   summarise,
@@ -95,6 +96,16 @@ describe('lists for display', () => {
     expect(list.platforms.map((p) => p.name)).toEqual(['Internet Archive', 'example.org'])
     expect(detect(list, 'https://archive.org/details/x')).toMatchObject({ kind: 'platform' })
     expect(detect(list, 'https://youtube.com/watch')).toEqual({ kind: 'unknown', host: 'youtube.com' })
+    expect(namesPlatforms(list)).toBe(true)
+  })
+
+  it('claims nothing for an older API that accepts every website and names none', () => {
+    const list = platformsFromDomains('open', [])
+    expect(namesPlatforms(list)).toBe(false)
+    expect(namesPlatforms(null)).toBe(true) // not connected yet: the site describes what it normally does
+    expect(detect(list, 'https://youtube.com/watch')).toEqual({ kind: 'none' })
+    expect(refusalFor(list, 'https://youtube.com/watch')).toBeNull()
+    expect(usable(list)).toEqual([])
   })
 })
 

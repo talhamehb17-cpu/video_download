@@ -9,7 +9,7 @@ import { Platforms } from '../components/sections/Platforms'
 import { useDownloader } from '../hooks/useDownloader'
 import type { ServiceState } from '../hooks/useServiceStatus'
 import { ApiError } from '../lib/api'
-import { refusalFor, usable, type PlatformList } from '../lib/platforms'
+import { namesPlatforms, refusalFor, usable, type PlatformList } from '../lib/platforms'
 import { usePageEntry } from '../lib/router'
 import { NAV_LINKS } from '../lib/site'
 
@@ -99,7 +99,7 @@ export default function Home({ service, onRetryService, refreshPlatforms, onActi
       </Hero>
       <Features config={config} />
       <Platforms list={platforms} />
-      <HowItWorks />
+      <HowItWorks recognises={namesPlatforms(platforms)} />
       <Faq config={config} />
     </main>
   )

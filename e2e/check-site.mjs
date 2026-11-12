@@ -67,6 +67,9 @@ const BROWSER_PATHS = [
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const seconds = (since) => `${((Date.now() - since) / 1000).toFixed(1)} s`
 const megabytes = (bytes) => `${(bytes / 1e6).toFixed(1)} MB`
+// The size limit the way the site words it: 1536 MiB is "1.5 GB".
+const sizeLimit = (bytes) =>
+  bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1).replace(/\.0$/, '')} GB` : `${Math.round(bytes / 1024 ** 2)} MB`
 const squash = (text) => (text ?? '').replace(/\s+/g, ' ').trim()
 
 function span(totalSeconds) {
@@ -293,7 +296,7 @@ async function checkService(ctx) {
   ctx.pass(
     'Service',
     `${site.origin} ("${title}", build ${build}) says "${pill}" after ${seconds(started)}. API ${ctx.apiOrigin}: ${config.name} ${config.version}, ${policy}, ` +
-      `files up to ${megabytes(config.limits.max_file_size_bytes)} kept for ${span(config.limits.file_ttl_seconds)}. ${direct}`,
+      `files up to ${sizeLimit(config.limits.max_file_size_bytes)} kept for ${span(config.limits.file_ttl_seconds)}. ${direct}`,
   )
   return true
 }

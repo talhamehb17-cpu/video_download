@@ -278,16 +278,25 @@ async def test_adding_a_website_checks_it_and_leaves_it_off(make_client: Callabl
     repeated = (await wait_for_check(client, headers, platform["id"]))["check"]
     assert repeated["url"] == f"{source}/watch/webm" and repeated["qualities"] >= 1 and repeated["conclusive"] is True
 
-    # a link that leads nowhere is reported as an error of that check
+    # a link the website refuses to serve: reported as an error of that check, and visitors learn about it
     failing = await client.post(f"/api/v1/admin/platforms/{platform['id']}/check", headers=headers,
-                                json={"url": f"{source}/gone"})
+                                json={"url": f"{source}/forbidden"})
     assert failing.status_code == 202
     failed = (await wait_for_check(client, headers, platform["id"]))["check"]
-    assert failed["error_code"] == "not_found" and failed["error_message"] and failed["status"] == "requires_review"
+    assert failed["error_code"] == "source_forbidden" and failed["error_message"] and failed["conclusive"] is True
+    assert failed["status"] == "requires_review" and "turned this server away" in failed["summary"]
     shown = next(p for p in (await client.get("/api/v1/platforms")).json()["platforms"] if p["id"] == platform["id"])
-    # visitors learn that the last check did not get a video
     assert shown["verified"] is False and shown["checked_at"] == failed["at"]
     assert "last check on this server couldn't read a video" in shown["note"]
+
+    # a link that leads nowhere says nothing about the website: recorded, but it is not a finding
+    missing = await client.post(f"/api/v1/admin/platforms/{platform['id']}/check", headers=headers,
+                                json={"url": f"{source}/gone"})
+    assert missing.status_code == 202
+    gone = (await wait_for_check(client, headers, platform["id"]))["check"]
+    assert gone["error_code"] == "not_found" and gone["conclusive"] is False and "no longer exists" in gone["summary"]
+    shown = next(p for p in (await client.get("/api/v1/platforms")).json()["platforms"] if p["id"] == platform["id"])
+    assert shown["verified"] is False and shown["checked_at"] is None and "Not confirmed" in shown["note"]
 
     assert (await client.delete(f"/api/v1/admin/platforms/{platform['id']}", headers=headers)).status_code == 204
     assert all(p["builtin"] for p in (await client.get("/api/v1/admin/platforms", headers=headers)).json()["platforms"])

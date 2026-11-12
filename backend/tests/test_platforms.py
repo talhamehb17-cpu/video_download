@@ -255,10 +255,15 @@ def test_check_results_are_interpreted() -> None:
     samples = state({"integrations": ["s"], "attempts": [
         _attempt(ok=False, code="not_found"), _attempt(ok=False, code="not_found"),
     ]}, url=None)
-    assert samples.status == "requires_review" and "2 sample links" in samples.summary and samples.conclusive
+    # a video that is gone says nothing about the platform
+    assert samples.status == "requires_review" and "2 sample links" in samples.summary and not samples.conclusive
     again = state({"integrations": [], "sample_links": False, "attempts": [_attempt(ok=False, code="not_found")]},
                   url=None)
     assert "behind the link" in again.summary, "the link of an earlier check is not called a sample link"
+    both = state({"integrations": ["s"], "previous_link": True, "attempts": [
+        _attempt(ok=False, code="login_required"), _attempt(ok=False, code="login_required"),
+    ]}, url=None)
+    assert "for 2 links" in both.summary and both.conclusive, "an earlier link and a sample link are just links"
     # sample links that ended differently: what happened to most of them is reported, and counted honestly
     mixed = state({"integrations": ["s"], "attempts": [
         _attempt(ok=False, code="not_found"),
