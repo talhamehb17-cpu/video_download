@@ -79,12 +79,12 @@ to understand:
 
 - **The catalog is an expectation, not a promise.** Whether a platform works depends on the network address of
   *your* server on *that* day. Large platforms (YouTube, Instagram, Facebook, TikTok, X) frequently ask servers
-  to sign in or to prove they are not a robot. Lumora never signs in, never uses cookies and never works
-  around such a check; the request fails with a message that says what happened. The admin panel's
-  compatibility check tells you what works from your server, and the site shows the outcome to visitors: a
-  platform reads "Worked from this server on <date>" only after such a check has read a public video from it,
-  "Didn't work from this server on <date>" when the last check got none, and "Not checked on this server yet"
-  otherwise.
+  to sign in or to prove they are not a robot. Lumora never signs in, never uses cookies from an account or a
+  browser and never works around such a check; the request fails with a message that says what happened. The
+  admin panel's compatibility check tells you what works from your server, and the site shows the outcome to
+  visitors: a platform reads "Worked from this server on <date>" only after such a check has read a public video
+  from it, "Didn't work from this server on <date>" when the last check got none, and "Not checked on this
+  server yet" otherwise.
 - **You are responsible for what your service serves.** Downloading from many platforms breaks their terms of
   service, and often copyright law, unless you own the content or have permission. Switch off what you do not
   want to offer, or use an allow list.
@@ -114,8 +114,8 @@ The policy is set with environment variables on the API:
 | `BLOCKED_DOMAINS=example.com` | Always refuse these, in every mode. |
 | `BLOCK_AGE_RESTRICTED=true` | Also decline every video that carries an 18+ label. Off by default, see [Age checks and age labels](#age-checks-and-age-labels). |
 
-Whatever the policy, Lumora never signs in, never uses cookies, never works around a paywall, region lock
-or bot check, and never circumvents DRM. Age checks are handled as follows.
+Whatever the policy, Lumora never signs in, never uses cookies from an account or a browser, never works
+around a paywall, region lock or bot check, and never circumvents DRM. Age checks are handled as follows.
 
 ### Age checks and age labels
 
@@ -136,9 +136,9 @@ declined, with a message that says why. No setting changes this. It covers:
 
 **The platform only labels.** Many platforms put an 18+ label on videos that they give to everybody:
 "sensitive" on X, "mature" on Kick or Imgur, "NSFW" on 9GAG or Tumblr, "explicit" in a podcast feed. The label
-alone declines nothing. Lumora reads a platform as a visitor who is not signed in and has confirmed nothing,
-and what the platform gives such a visitor is treated as public. Ratings below 18 are never a reason to
-decline.
+alone declines nothing. Lumora does not sign in, and what a platform gives without a sign-in is treated as
+public; where the reader had to confirm an age to get that far, the label says so and the video is declined
+(above). Ratings below 18 are never a reason to decline.
 
 What this default means in practice:
 
@@ -148,9 +148,14 @@ What this default means in practice:
   has to confirm an age.
 - `BLOCK_AGE_RESTRICTED=true` declines every video with an 18+ label instead. It is the cautious choice for a
   service that is open to everybody.
-- Known limit: Lumora needs the label to tell which videos a platform asks about. The reader for Steam store
-  trailers confirms an age for every trailer and labels none, so with `SOURCE_POLICY=open` those are not
-  caught.
+
+Two more things to know:
+
+- Lumora needs the label to tell which videos a platform asks about. The reader for Steam store trailers
+  confirms an age for every trailer and labels none, so with `SOURCE_POLICY=open` those are not caught.
+- YouTube asks a viewer to confirm a content warning before it plays some videos. The reader confirms that
+  warning by itself, in every request it sends. A video that YouTube gives to any viewer is accepted; one that
+  YouTube age-restricts as well carries the 18+ label and is declined.
 
 ## Admin panel
 

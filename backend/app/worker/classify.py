@@ -26,7 +26,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         # restricted", "usage restrictions" and "image verification" are other things.
         ("age_restricted",
          r"\b(confirm|verify)(ing)? your age|\bage[-_ ]?(restrict|gate|verif|check|confirm)"
-         r"|inappropriate for some users|\bnsfw\b|\badult content|\bmature (content|audiences?)"
+         r"|inappropriate for some users|\bnsfw\b|\badult (content|verification|confirm\w*|check)"
+         r"|\bmature (content|audiences?)"
          r"|(?<![\d.])18 years (old|of age|or older)|\b(over|under|at least) 18\b|(?<![\d.])18\+"),
         ("private_content", r"private video|is private|private (post|account|media|content|group)|only visible to"),
         ("paywalled",

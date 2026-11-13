@@ -221,9 +221,12 @@ def _reusable(info: dict[str, Any]) -> dict[str, Any]:
 # ----------------------------------------------------------------------------- analyze
 # Some readers answer a platform's age question on their own, before anybody is asked:
 # the Reddit reader sends Reddit's "I am over 18" cookie with every request, the
-# Dailymotion reader switches the family filter off, others send a cookie, a form or a
-# made-up birthday. An 18+ label from one of them therefore means that the platform asks
-# first, and that question is not Lumora's to answer for a visitor.
+# Dailymotion reader switches the family filter off, others send a cookie, fill in the
+# site's age form or make up a birthday. An 18+ label from one of them therefore means
+# that the platform asks first, and that question is not Lumora's to answer for a visitor.
+#
+# A reader of this package that is switched off (``_WORKING = False``) is left out: yt-dlp
+# does not use it, so it never brings a video in that would need declining.
 #
 # Keyed by the reader, with the domains of its pages where another reader can finish
 # the job: a Reddit post that embeds a video from elsewhere keeps the address of the
@@ -238,6 +241,7 @@ AGE_QUESTION_ANSWERED_BY_READER: dict[str, tuple[str, ...]] = {
     "PornHub": (),
     "VideoPress": (),
     "YouPorn": (),
+    "Murrtube": (),
 }
 
 

@@ -162,8 +162,9 @@ def test_the_notice_still_exists_in_the_installed_reader() -> None:
     video(extractor_key="VideoPress", age_limit=18, webpage_url="https://videopress.com/embed/abc"),
     video(extractor_key="PornHub", age_limit=18),
     video(extractor_key="YouPorn", age_limit=18),
+    video(extractor_key="Murrtube", age_limit=18, webpage_url="https://murrtube.net/v/0J2Q"),
 ], ids=["reddit", "old-reddit", "reddit-no-address", "dailymotion", "dai.ly", "reddit-embed", "redd.it-embed",
-        "cda", "videopress", "pornhub", "youporn"])
+        "cda", "videopress", "pornhub", "youporn", "murrtube"])
 @pytest.mark.parametrize("limits", [PLATFORM_DECIDES, STRICT, {}])
 def test_a_video_behind_an_age_question_is_declined(info: dict[str, Any], limits: dict[str, Any]) -> None:
     assert refusal(info, limits) == "age_restricted"
@@ -174,7 +175,8 @@ def test_a_video_behind_an_age_question_is_declined(info: dict[str, Any], limits
     video(extractor_key="Reddit", age_limit=None, webpage_url="https://www.reddit.com/r/videos/comments/abc/"),
     video(extractor_key="Dailymotion", age_limit=0, webpage_url="https://www.dailymotion.com/video/x8abcde"),
     video(extractor_key="Dailymotion", webpage_url="https://www.dailymotion.com/video/x8abcde"),
-], ids=["reddit-0", "reddit-none", "dailymotion-0", "dailymotion-unset"])
+    video(extractor_key="Murrtube", age_limit=0, webpage_url="https://murrtube.net/v/0J2Q"),
+], ids=["reddit-0", "reddit-none", "dailymotion-0", "dailymotion-unset", "murrtube-0"])
 @pytest.mark.parametrize("limits", [PLATFORM_DECIDES, STRICT])
 def test_ordinary_videos_of_those_platforms_are_untouched(info: dict[str, Any], limits: dict[str, Any]) -> None:
     assert refusal(info, limits) is None
@@ -206,15 +208,25 @@ REVIEWED_READERS: dict[str, str | None] = {
     "pornhub.py": "PornHub",          # cookies age_verified, accessAgeDisclaimer…
     "videopress.py": "VideoPress",    # a made-up birthday with every request
     "youporn.py": "YouPorn",          # cookie age_verified=1
+    "murrtube.py": "Murrtube",        # posts the site's age form before every video
+    "tube8.py": None,                 # cookie age_verified=1, but the reader is switched off
     "niconico.py": None,              # only after a sign-in, which Lumora never has
     "sonyliv.py": None,               # needs an account, and the streams are DRM-protected
     "iprima.py": None,                # needs an account
     "steam.py": None,                 # confirms for every trailer and labels none (README: known limit)
 }
+# readers that answer a platform's age question, and are switched on
+ANSWERING_KEYS = {name for name in REVIEWED_READERS.values() if name}
+
 AGE_ANSWER = re.compile(
     r"""_set_cookie\([^)]*['"]\w*(?:over_?18|age_?(?:verif|auth|gate|check|confirm|disclaimer)"""
     r"""|adult|mature|birth)\w*['"]"""
-    r"""|_set_dailymotion_cookie\('ff'|random_birthday\(|['"]age_?confirm\w*['"]\s*:""",
+    r"""|_set_dailymotion_cookie\('ff'|random_birthday\(|['"]age_?confirm\w*['"]\s*:"""
+    # a cookie sent with a request, as the Tube8 reader does
+    r"""|['"]Cookie2?['"]\s*:\s*['"][^'"]*(?:over_?18|age_?\w*(?:verif|auth|gate|check|confirm)\w*"""
+    r"""|adult|mature)"""
+    # the address of a form that confirms an age, as the Murrtube reader posts to
+    r"""|https?://[^'"\s]*\b(?:accept|confirm)[_-]?(?:age|adult|mature)""",
     re.IGNORECASE,
 )
 
@@ -231,7 +243,10 @@ def test_the_list_of_readers_that_answer_an_age_question_is_complete() -> None:
         if path.name != "lazy_extractors.py" and AGE_ANSWER.search(path.read_text(encoding="utf-8"))
     }
     assert found == set(REVIEWED_READERS)
-    assert {name for name in REVIEWED_READERS.values() if name} == set(AGE_QUESTION_ANSWERED_BY_READER)
+    # yt-dlp still offers a switched-off reader, but skips it unless --ies is given
+    switched_on = {reader.ie_key() for reader in gen_extractor_classes() if reader.working()}
+    answers = ANSWERING_KEYS & switched_on
+    assert answers == set(AGE_QUESTION_ANSWERED_BY_READER), "the list is the readers that answer, switched on ones only"
 
     reddit = (extractors / "reddit.py").read_text(encoding="utf-8")
     assert re.search(r"_set_cookie\('reddit\.com', 'over18', '1'\)", reddit)
@@ -312,6 +327,7 @@ def test_the_explanation_names_the_reason_and_what_lumora_does_not_do() -> None:
     "[x] 1: This video is only available to viewers over 18",
     "[x] 1: Adult content. Log in to view",
     "[x] 1: This video is rated 18+ and needs an account",
+    "[pandatv] x: Adult verification is required for this stream",   # a sign-in for the age check
 ])
 def test_refusals_for_age_reasons_are_recognised(message: str) -> None:
     assert classify_message(message, default="fallback") == "age_restricted"
@@ -334,6 +350,7 @@ def test_refusals_for_age_reasons_are_recognised(message: str) -> None:
     ("[youtube] x: Sign in to confirm you’re not a bot. Use --cookies-from-browser", "verification_required"),
     ("[twitter] 1: You are not authorized to view this protected tweet. Use --cookies", "login_required"),
     ("[instagram] x: Requested content is not available, rate-limit reached or login required", "login_required"),
+    ("[nbc] x: sensitive", "fallback"),   # a request parameter, not the platform's message
 ])
 def test_ordinary_failures_are_not_blamed_on_age(message: str, code: str) -> None:
     assert classify_message(message, default="fallback") == code
