@@ -73,6 +73,12 @@ class TaskError(Exception):
 
 
 # ------------------------------------------------------------------- yt-dlp plumbing
+# What the YouTube reader prints when the platform answered with its age check and the
+# reader went on to try another player. Anchored to the reader's own sentence, after
+# its "[youtube] <id>: " prefix, so that words in an address or a title never match.
+AGE_CHECK_NOTICE = re.compile(r"^\[youtube\] [\w-]{6,}: This video is age-restricted\b")
+
+
 class _Log:
     """Collects yt-dlp output; nothing is ever printed to the protocol stream."""
 
@@ -80,8 +86,12 @@ class _Log:
         self.lines: deque[str] = deque(maxlen=80)
         self.warnings: list[str] = []
         self.errors: list[str] = []
+        # The reader reported that the platform put this video behind its age check.
+        self.age_check = False
 
     def _add(self, level: str, message: str) -> None:
+        if AGE_CHECK_NOTICE.search(message):
+            self.age_check = True
         line = f"{level}: {message}"[:600]
         self.lines.append(line)
         print(line, file=sys.stderr, flush=True)
@@ -209,18 +219,82 @@ def _reusable(info: dict[str, Any]) -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------- analyze
-def enforce_content_policy(info: dict[str, Any], limits: dict[str, Any]) -> None:
-    """Refuse anything that isn't a plain, public, on-demand video."""
+# Some readers answer a platform's age question on their own, before anybody is asked:
+# the Reddit reader sends Reddit's "I am over 18" cookie with every request, the
+# Dailymotion reader switches the family filter off, others send a cookie, a form or a
+# made-up birthday. An 18+ label from one of them therefore means that the platform asks
+# first, and that question is not Lumora's to answer for a visitor.
+#
+# Keyed by the reader, with the domains of its pages where another reader can finish
+# the job: a Reddit post that embeds a video from elsewhere keeps the address of the
+# post and Reddit's label. The list is checked against the installed readers by
+# tests/test_age_policy.py, so an update of yt-dlp that adds one is noticed.
+AGE_QUESTION_ANSWERED_BY_READER: dict[str, tuple[str, ...]] = {
+    # platforms of the built-in list
+    "Reddit": ("reddit.com", "redd.it"),
+    "Dailymotion": ("dailymotion.com", "dai.ly"),
+    # websites outside the list (SOURCE_POLICY=open, or added by an administrator)
+    "CDA": (),
+    "PornHub": (),
+    "VideoPress": (),
+    "YouPorn": (),
+}
+
+
+def _reader_answered_an_age_question(info: dict[str, Any]) -> bool:
+    if info.get("extractor_key") in AGE_QUESTION_ANSWERED_BY_READER:
+        return True
+    domains = [domain for group in AGE_QUESTION_ANSWERED_BY_READER.values() for domain in group]
+    for key in ("webpage_url", "original_url"):
+        address = info.get(key)
+        try:
+            host = (urlsplit(address).hostname or "") if isinstance(address, str) else ""
+        except ValueError:
+            continue
+        if host and any(host_matches(host, domain) for domain in domains):
+            return True
+    return False
+
+
+def enforce_content_policy(info: dict[str, Any], limits: dict[str, Any], *, age_check: bool = False) -> None:
+    """Refuse anything that isn't a plain, public, on-demand video.
+
+    About age, the platform decides. ``age_limit`` is a label, and many platforms put
+    "18+" on videos they give to everybody (sensitive, mature, explicit): the label
+    alone declines nothing. What declines a video is the platform asking for a
+    sign-in or an age confirmation. That shows in three ways:
+
+    * ``availability`` says an account is needed and the video carries the label;
+    * the reader's log says so (``age_check``): it met the platform's age check and
+      went on to read the video through another player;
+    * the reader is one that answers the platform's age question by itself, and the
+      video carries the label (``AGE_QUESTION_ANSWERED_BY_READER``).
+
+    In all three cases the reader may well have got the video. It is not handed out.
+    """
     if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
         raise TaskError("live_stream", f"live_status={info.get('live_status')}")
 
+    age_limit = info.get("age_limit")
+    adult_label = isinstance(age_limit, (int, float)) and not isinstance(age_limit, bool) and age_limit >= 18
+
     availability = info.get("availability")
     if availability in _AVAILABILITY_ERRORS:
-        raise TaskError(_AVAILABILITY_ERRORS[availability], f"availability={availability}")
+        code = _AVAILABILITY_ERRORS[availability]
+        if code == "login_required" and (adult_label or age_check):
+            code = "age_restricted"  # the sign-in the platform asks for is its age check
+        raise TaskError(code, f"availability={availability} age_limit={age_limit}")
+    if age_check:
+        raise TaskError("age_restricted", "the reader reported the platform's age check")
+    if adult_label and _reader_answered_an_age_question(info):
+        raise TaskError(
+            "age_restricted",
+            f"age_limit={age_limit} reader={info.get('extractor_key')}: the platform asks for an age confirmation",
+        )
 
-    age_limit = info.get("age_limit")
-    if limits.get("block_age_restricted", True) and isinstance(age_limit, (int, float)) and age_limit >= 18:
-        raise TaskError("age_restricted", f"age_limit={age_limit}")
+    # The operator's stricter rule, off by default: decline on the label itself.
+    if limits.get("block_age_restricted", False) and adult_label:
+        raise TaskError("age_rating_blocked", f"age_limit={age_limit}")
 
     duration = info.get("duration")
     max_duration = limits.get("max_duration_seconds")
@@ -304,7 +378,7 @@ def analyze(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
         # Keep what the source offers, not what yt-dlp happened to pick by default:
         # a later download must select from ``formats`` afresh (see ``_reusable``).
         info = _reusable(ydl.sanitize_info(info, remove_private_keys=True))
-        enforce_content_policy(info, task.get("limits") or {})
+        enforce_content_policy(info, task.get("limits") or {}, age_check=log.age_check)
         thumbnail = fetch_thumbnail(ydl, info, work_dir, log)
 
     if info.get("extractor_key") == "HTML5MediaEmbed" and isinstance(info.get("title"), str):
@@ -581,7 +655,11 @@ MAX_SAMPLE_LINKS = 3
 
 
 def _sample_worthy(test: dict[str, Any]) -> bool:
-    """A test link of the extractor's maintainers that points to one plain, public video."""
+    """A test link of the extractor's maintainers that points to one plain, public video.
+
+    Links with an 18+ label are left out whatever BLOCK_AGE_RESTRICTED says: a check
+    should learn about the platform from an ordinary video.
+    """
     info = test.get("info_dict")
     return (
         not test.get("only_matching") and not test.get("skip")
@@ -662,7 +740,7 @@ def _try_link(task: dict[str, Any], url: str) -> dict[str, Any]:
                     raise TaskError("unsupported_source", "no playable entry in playlist")
                 info = entries[0]
             info = ydl.sanitize_info(info, remove_private_keys=True)
-            enforce_content_policy(info, task.get("limits") or {})
+            enforce_content_policy(info, task.get("limits") or {}, age_check=log.age_check)
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:

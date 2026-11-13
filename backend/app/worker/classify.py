@@ -22,9 +22,12 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("verification_required",
          r"not a bot|captcha|cloudflare|unusual traffic|human verification|verify (that )?you(.re| are) (a )?human"
          r"|anti-?bot|challenge"),
+        # The platform asked for an age check. "age" has to be a word of its own: "page
+        # restricted", "usage restrictions" and "image verification" are other things.
         ("age_restricted",
-         r"confirm your age|age[- ]?restrict|age[- ]?gate|age verification|inappropriate for some users"
-         r"|adult content|18 years"),
+         r"\b(confirm|verify)(ing)? your age|\bage[-_ ]?(restrict|gate|verif|check|confirm)"
+         r"|inappropriate for some users|\bnsfw\b|\badult content|\bmature (content|audiences?)"
+         r"|(?<![\d.])18 years (old|of age|or older)|\b(over|under|at least) 18\b|(?<![\d.])18\+"),
         ("private_content", r"private video|is private|private (post|account|media|content|group)|only visible to"),
         ("paywalled",
          r"premium|paywall|subscri(ption|ber)|purchas|rental|\brent\b|pay[- ]per[- ]view|paid content|members"

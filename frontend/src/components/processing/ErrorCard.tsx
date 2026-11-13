@@ -23,6 +23,7 @@ const ICONS: Record<string, LucideIcon> = {
   login_required: Lock,
   paywalled: Lock,
   age_restricted: Lock,
+  age_rating_blocked: Lock,
   geo_restricted: Lock,
   drm_protected: Lock,
   verification_required: Lock,

@@ -132,6 +132,12 @@ def interpret(
             f"The platform turned this server away for {tried}: {_message(code)} "
             "Try another public link. If every link ends like this, the platform doesn't work from this server."
         ), **base)
+    if code == "age_rating_blocked":
+        # This service's own rule turned the video down, not the platform: nothing was learned.
+        return CheckResult(status="requires_review", conclusive=False, summary=(
+            f"The video behind {tried} carries an 18+ label, which this service is set up to decline "
+            "(BLOCK_AGE_RESTRICTED). Paste a link to another public video."
+        ), **base)
     if code == "not_found":
         # A video that is gone says nothing about the platform: nothing was learned.
         return CheckResult(status="requires_review", conclusive=False, summary=(

@@ -59,8 +59,16 @@ ERRORS: dict[str, ErrorSpec] = {
     "paywalled": ErrorSpec(
         422, "This video is behind a paywall or subscription.", "Lumora doesn't bypass paid access."
     ),
+    # The platform's own rule: it asked for a sign-in or an age check.
     "age_restricted": ErrorSpec(
-        422, "This video is age-restricted.", "Lumora doesn't bypass age gates."
+        422, "The platform only shows this video after a sign-in or age check.",
+        "Lumora never signs in and never confirms an age for you, so it can't download this one. "
+        "Videos that the platform shows to everyone are not affected.",
+    ),
+    # The operator's rule (BLOCK_AGE_RESTRICTED=true): the platform shows the video to everybody.
+    "age_rating_blocked": ErrorSpec(
+        422, "This video carries an 18+ label.",
+        "This service is set up to decline videos that a platform marks as 18+.",
     ),
     "geo_restricted": ErrorSpec(
         422, "This video isn't available in the server's region.", "Lumora doesn't bypass regional restrictions."

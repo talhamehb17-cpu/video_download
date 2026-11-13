@@ -54,6 +54,14 @@ NO_SUBS_PAGE = """<!doctype html>
 <body><video controls><source src="/media/v240.mp4" type="video/mp4" res="240"></video></body></html>
 """
 
+# The same public page, carrying the machine-readable "restricted to adults" label that
+# websites put on themselves. Readers report it as an 18+ rating. Nobody has to sign
+# in to watch it, and the clip is the usual synthetic one.
+RATED_PAGE = WATCH_PAGE.replace(
+    '<meta charset="utf-8">',
+    '<meta charset="utf-8">\n    <meta name="rating" content="RTA-5042-1996-1400-1577-RTA">',
+)
+
 ARTICLE_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Just an article</title></head>
 <body><article><h1>No video here</h1><p>Only words.</p></article></body></html>
@@ -68,6 +76,9 @@ def create_app(root: Path, *, internal_port: int = 9) -> Starlette:
 
     async def watch(_: Request) -> Response:
         return HTMLResponse(WATCH_PAGE)
+
+    async def watch_rated(_: Request) -> Response:
+        return HTMLResponse(RATED_PAGE)
 
     async def watch_webm(_: Request) -> Response:
         return HTMLResponse(WEBM_PAGE)
@@ -144,6 +155,7 @@ def create_app(root: Path, *, internal_port: int = 9) -> Starlette:
         routes=[
             Route("/watch/demo", watch),
             Route("/watch/webm", watch_webm),
+            Route("/watch/rated", watch_rated),
             Route("/watch/nosubs", watch_nosubs),
             Route("/article", article),
             Route("/redirect/internal", redirect_internal),

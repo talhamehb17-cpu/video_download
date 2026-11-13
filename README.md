@@ -42,9 +42,9 @@ the live site is checked.
 - **Real progress**: percentage, speed and time left as reported by the download, plus cancel at any moment.
 - **Temporary files.** A finished file is deleted after a set time (30 minutes by default) or immediately with
   "Delete now". Nothing is kept after a restart.
-- **Clear failures.** Private, paid, age-restricted, region-locked, DRM-protected and live content is declined
-  with a specific message. So are invalid links, platforms that are switched off and websites that are not on
-  the list.
+- **Clear failures.** Private and paid videos, videos behind a platform's sign-in or age check, region-locked,
+  DRM-protected and live content are declined with a specific message. So are invalid links, platforms that
+  are switched off and websites that are not on the list.
 - **An admin panel** for the operator: switch platforms on and off, add websites, check what really works
   from your server, and watch disk space and recent errors. See [Admin panel](#admin-panel).
 - **No account, no tracking.** No cookies, analytics or third-party scripts. Fonts are served by the site itself.
@@ -112,9 +112,45 @@ The policy is set with environment variables on the API:
 | `SOURCE_POLICY=allowlist` | Accept only the domains in `ALLOWED_DOMAINS` (sub-domains included). The admin panel's switches have no effect. The cautious choice: the default list is five sources that publish their videos for download and reuse (Internet Archive, Wikimedia Commons, media.ccc.de, NASA, Blender). |
 | `SOURCE_POLICY=open` | Accept every public source the extractor can read, except platforms that are switched off. |
 | `BLOCKED_DOMAINS=example.com` | Always refuse these, in every mode. |
+| `BLOCK_AGE_RESTRICTED=true` | Also decline every video that carries an 18+ label. Off by default, see [Age checks and age labels](#age-checks-and-age-labels). |
 
-Whatever the policy, Lumora never signs in, uses cookies, bypasses paywalls, age gates, region locks or bot
-checks, and never circumvents DRM.
+Whatever the policy, Lumora never signs in, never uses cookies, never works around a paywall, region lock
+or bot check, and never circumvents DRM. Age checks are handled as follows.
+
+### Age checks and age labels
+
+These are two different things, and Lumora treats them differently.
+
+**The platform asks.** A video that a platform only gives after a sign-in or an age confirmation is always
+declined, with a message that says why. No setting changes this. It covers:
+
+- Videos that need an account: age-restricted videos on YouTube, posts that X shows only to signed-in adults.
+  This includes a YouTube video that the reader could still get through an embedded player.
+- Videos behind an "are you over 18?" question: posts that Reddit marks 18+, videos that Dailymotion marks
+  as explicit. The readers for these platforms answer that question by themselves. Lumora does not pass the
+  answer on: such a video is declined.
+- The same on websites outside the list whose readers confirm an age themselves. The readers concerned are
+  named in `AGE_QUESTION_ANSWERED_BY_READER` in
+  [`backend/app/worker/tasks.py`](backend/app/worker/tasks.py), and a test compares that list with the
+  installed readers.
+
+**The platform only labels.** Many platforms put an 18+ label on videos that they give to everybody:
+"sensitive" on X, "mature" on Kick or Imgur, "NSFW" on 9GAG or Tumblr, "explicit" in a podcast feed. The label
+alone declines nothing. Lumora reads a platform as a visitor who is not signed in and has confirmed nothing,
+and what the platform gives such a visitor is treated as public. Ratings below 18 are never a reason to
+decline.
+
+What this default means in practice:
+
+- Some platforms hide labelled videos on their own pages from visitors who are not signed in, and still give
+  them to any program that asks. Lumora accepts those.
+- With `SOURCE_POLICY=open`, websites for adults are accepted like any other website, unless their reader
+  has to confirm an age.
+- `BLOCK_AGE_RESTRICTED=true` declines every video with an 18+ label instead. It is the cautious choice for a
+  service that is open to everybody.
+- Known limit: Lumora needs the label to tell which videos a platform asks about. The reader for Steam store
+  trailers confirms an age for every trailer and labels none, so with `SOURCE_POLICY=open` those are not
+  caught.
 
 ## Admin panel
 
@@ -308,6 +344,7 @@ Version 1.1 added the platform list and the admin panel. When updating from 1.0,
 | --- | --- |
 | `SOURCE_POLICY` | Set it to `platforms`, or remove the line. If it still says `allowlist`, only `ALLOWED_DOMAINS` are accepted and the admin panel's switches do nothing. If it says `open`, every website the reader knows stays accepted, the site cannot tell visitors in advance what will work, and the admin panel can only switch platforms off. |
 | `MAX_FILE_SIZE_MB` | The default is now `1536` (1.5 GB). A line with an older value keeps the older limit: change or remove it. |
+| `BLOCK_AGE_RESTRICTED` | The default is now `false`: an 18+ label alone no longer declines a video that the platform shows to everybody. A line that says `true` keeps the old rule: remove it unless you want that. Videos behind a platform's age check are declined either way. |
 | `DATA_DIR` | New. Create a folder only the service's user can read (`sudo install -d -m 700 -o <user> -g <user> /var/lib/lumora`) and point this to it. |
 | `ADMIN_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | New. Both must be set for the admin panel to exist. |
 | `MIN_FREE_DISK_MB` | New, default `1024`. No download starts, and a running one stops, before free space would fall below this. A 1.5 GB download that needs merging reserves about 3 GB while it runs, so check `df -h` for the disk that holds `STORAGE_DIR`. |
@@ -390,6 +427,7 @@ comments; the ones you are most likely to change:
 | `SOURCE_POLICY` | `platforms` | `platforms`, `allowlist` or `open`. See [Platforms and source policy](#platforms-and-source-policy). |
 | `ALLOWED_DOMAINS` | five open sources | Domains accepted in `allowlist` mode. |
 | `BLOCKED_DOMAINS` | empty | Domains refused in every mode. |
+| `BLOCK_AGE_RESTRICTED` | `false` | `true` declines every video with an 18+ label, not only those behind a platform's age check. See [Age checks and age labels](#age-checks-and-age-labels). |
 | `EXAMPLE_LINKS` | two open films | "Try an example" links: `Label \| Source \| URL` entries separated by `;`. |
 | `ADMIN_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | unset | Both set = the [admin panel](#admin-panel) exists. The password is only the initial one. |
 | `DATA_DIR` | `backend/data` | Where the admin account and platform settings are kept. Must survive restarts. |
@@ -591,6 +629,8 @@ storage. Each lives in one module (`services/jobs.py`, `services/storage.py`). V
 | "… isn't a platform this service works with" / "This website isn't enabled on this service" | The link's website is not on the platform list. Add it in the admin panel, or see [Platforms and source policy](#platforms-and-source-policy). |
 | "… is switched off on this service" | The administrator switched that platform off. |
 | "This source requires signing in to view the video" / "The source is asking for a human verification or sign-in check" | The platform turned the server away. Lumora never signs in or works around this. Run the platform's check in the admin panel to see whether any public link works from your server. |
+| "The platform only shows this video after a sign-in or age check" | The platform asks for an account or an age confirmation before it shows this video: age-restricted on YouTube, marked 18+ on Reddit, explicit on Dailymotion. Lumora never signs in and never confirms an age for a visitor, and no setting changes it. |
+| "This video carries an 18+ label" | `BLOCK_AGE_RESTRICTED=true` is set on the API, so a video is declined for its label although the platform shows it to everybody. Remove the line and restart if you do not want that. |
 | Only five sources work after updating to 1.1 | `SOURCE_POLICY=allowlist` is still set on the API. Set `platforms` and restart. The admin panel shows a warning while this is the case. |
 | Admin page: "The API needs an update first" | The API is older than 1.1. Update it ([Deploying](#deploying)). |
 | Admin page: "The admin panel is switched off on the server" | `ADMIN_EMAIL` or `ADMIN_BOOTSTRAP_PASSWORD` is not set on the API. |

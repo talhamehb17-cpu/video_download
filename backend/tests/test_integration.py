@@ -105,6 +105,34 @@ async def test_analyze_failures_are_explained(live: httpx.AsyncClient, source: s
     assert list((storage(live) / "analyses").iterdir()) == []       # nothing left behind
 
 
+async def test_a_public_video_with_an_adult_label_is_processed_like_any_other(
+    live: httpx.AsyncClient, source: str, tmp_path: Path
+) -> None:
+    # The page labels itself 18+ and anyone can watch it without signing in: the label alone is no reason to decline.
+    analysis = await analyze(live, f"{source}/watch/rated")
+    assert analysis["title"] == "Lumora sample clip"
+    assert [q["label"] for q in analysis["qualities"]] == ["720p", "360p", "240p"]
+    assert [s["language"] for s in analysis["subtitles"]] == ["en", "es", "fr"]
+    smallest = analysis["qualities"][-1]
+    job = await wait_for_job(live, (await start_job(live, analysis, smallest))["id"])
+    assert job["status"] == "completed", job
+    assert any("Video" in line for line in streams(await fetch_file(live, job, tmp_path)))
+
+
+async def test_the_strict_setting_declines_the_same_page_and_says_why(
+    make_client: Callable[..., Any], source: str
+) -> None:
+    port = source.rsplit(":", 1)[1]
+    strict = await make_client(unsafe_allow_hosts=[f"127.0.0.1:{port}"], block_age_restricted=True)
+    response = await strict.post("/api/v1/analyze", json={"url": f"{source}/watch/rated"})
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "age_rating_blocked" and "18+" in error["message"] and "This service" in error["hint"]
+    assert list((storage(strict) / "analyses").iterdir()) == []       # nothing left behind
+    # a page without the label is untouched by the setting
+    assert (await strict.post("/api/v1/analyze", json={"url": f"{source}/watch/demo"})).status_code == 200
+
+
 async def test_analyze_timeout(make_client: Callable[..., Any], source: str) -> None:
     port = source.rsplit(":", 1)[1]
     client = await make_client(unsafe_allow_hosts=[f"127.0.0.1:{port}"], analyze_timeout_seconds=5)

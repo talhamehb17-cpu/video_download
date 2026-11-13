@@ -44,6 +44,7 @@ def main() -> None:
         ("HLS playlist (adaptive, WebVTT subtitles)", "/hls/master.m3u8"),
         ("DASH manifest (separate video + audio: merged)", "/dash/manifest.mpd"),
         ("WebM page", "/watch/webm"),
+        ("Public page with an 18+ label", "/watch/rated"),
         ("Direct file", "/media/v360.mp4"),
         ("Slow file (watch progress, try cancelling)", "/throttled.mp4?delay=0.15"),
         ("Page without a video (error state)", "/article"),
