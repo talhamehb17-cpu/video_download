@@ -1,14 +1,14 @@
 import { m } from 'framer-motion'
 import { ArrowDownToLine, Ban, Captions, CircleCheck, Hourglass, Info, ListRestart, Timer, Trash2, WifiOff } from 'lucide-react'
+import { useState } from 'react'
 
 import { useCountdown } from '../../hooks/useCountdown'
 import { isActive } from '../../hooks/useDownloader'
-import { ApiError, apiUrl, type Analysis, type Job } from '../../lib/api'
-import { cn } from '../../lib/cn'
+import { ageConfirmed, forgetAge } from '../../lib/ageConsent'
+import { ApiError, api, saveBlob, toApiError, type Analysis, type Job } from '../../lib/api'
 import { formatBytes, formatClock, formatEta, formatSpeed, languageName } from '../../lib/format'
 import { isWaiting, jobStatusText } from '../../lib/jobStatus'
 import { Button } from '../ui/Button'
-import { buttonClass } from '../ui/buttonClass'
 import { ErrorCard } from './ErrorCard'
 import { Poster } from './ResultCard'
 
@@ -120,9 +120,44 @@ function ActiveJob({ job, fresh, busy, reconnecting, onCancel }: Pick<JobPanelPr
 
 function ReadyJob({ job, expiresAt, busy, onCancel, onBack }: Pick<JobPanelProps, 'job' | 'expiresAt' | 'busy' | 'onCancel' | 'onBack'>) {
   const remaining = useCountdown(expiresAt)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<ApiError | null>(null)
   const file = job.file
   if (!file) return null
   const expired = remaining !== null && remaining <= 0
+
+  // Fetched in the page rather than followed as a plain link, so an 18+ file only
+  // leaves the server for a visitor whose answer travels with the request.
+  const save = () => {
+    if (!file || expired || saving || !ageConfirmed()) return
+    setSaving(true)
+    setSaveError(null)
+    api
+      .file(file.url, true)
+      .then(({ blob, filename }) => saveBlob(blob, filename ?? file.name))
+      .catch((error: unknown) => setSaveError(toApiError(error)))
+      .finally(() => setSaving(false))
+  }
+
+  // A visitor whose answer ran out is asked again rather than given a file they cannot read.
+  if (!ageConfirmed()) {
+    return (
+      <div className="mt-6 rounded-2xl border border-line bg-glass p-4 text-sm text-ink-soft sm:p-5">
+        The confirmation of your age has expired.{' '}
+        <button
+          type="button"
+          className="font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
+          onClick={() => {
+            forgetAge()
+            window.location.reload()
+          }}
+        >
+          Reload the page
+        </button>{' '}
+        to confirm it again; the file is kept for a few more minutes.
+      </div>
+    )
+  }
 
   return (
     <m.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="mt-6">
@@ -145,17 +180,22 @@ function ReadyJob({ job, expiresAt, busy, onCancel, onBack }: Pick<JobPanelProps
               </p>
             </div>
           </div>
-          {/* A plain link to the file: the browser streams it straight to disk. */}
-          <a
-            href={expired ? undefined : apiUrl(file.url)}
-            download={file.name}
-            aria-disabled={expired || undefined}
-            className={cn(buttonClass('primary', 'lg', 'w-full shrink-0 sm:w-auto'), expired && 'pointer-events-none opacity-50')}
+          <Button
+            size="lg"
+            onClick={save}
+            loading={saving}
+            disabled={expired}
+            className="w-full shrink-0 sm:w-auto"
+            icon={<ArrowDownToLine className="size-4" aria-hidden />}
           >
-            <ArrowDownToLine className="size-4" aria-hidden />
             Save file
-          </a>
+          </Button>
         </div>
+        {saveError && (
+          <p role="alert" className="mt-3 text-sm text-bad">
+            {saveError.message} {saveError.hint}
+          </p>
+        )}
       </div>
 
       {job.embedded_subtitles.length > 0 && (

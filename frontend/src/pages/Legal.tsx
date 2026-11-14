@@ -66,7 +66,9 @@ export function Privacy({ config }: { config: ServiceConfig | null }) {
           Fonts and scripts are served from this site itself.
         </p>
         <p>
-          One value is stored in your browser: your light or dark theme choice (in local storage). It never leaves your device.
+          Two values are stored in your browser: your light or dark theme choice, and — only if you answer yes to the
+          age question once — the time until which that answer counts (six hours). Neither leaves your device as a
+          cookie; the age answer is sent with a request as a header and is not stored on the server.
         </p>
       </Block>
 
@@ -145,7 +147,10 @@ export function Terms() {
       <Block title="What the service will not do">
         <p>
           {BRAND} does not sign in to accounts and does not bypass DRM, paywalls, age checks, regional restrictions or other access
-          controls. Private, protected and restricted content is refused. Please do not try to make it do otherwise.
+          controls. Where a platform asks about age, the question is put to you, in your browser, and only your own answer counts:
+          it is kept on your device for six hours and sent with each request for that video, and it is what allows the video to be
+          read. Nothing else is assumed about your age. Private, protected and restricted content is refused. Please do not try to
+          make it do otherwise.
         </p>
       </Block>
 

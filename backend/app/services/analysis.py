@@ -64,8 +64,14 @@ def worker_limits(settings: Settings) -> dict[str, Any]:
         "max_file_bytes": settings.max_file_size_bytes,
         "max_duration_seconds": settings.max_duration_seconds,
         "block_age_restricted": settings.block_age_restricted,
+        "age_confirmation": settings.age_confirmation,
         "min_free_bytes": settings.min_free_disk_bytes,
     }
+
+
+def age_gate(settings: Settings) -> bool:
+    """Whether an 18+ video is offered at all, after the visitor confirms their age."""
+    return settings.age_confirmation and not settings.block_age_restricted
 
 
 @dataclass
@@ -87,6 +93,9 @@ class Analysis:
     notices: list[str]
     thumbnail: tuple[Path, str] | None = None
     locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    # True when the platform only offers this video to visitors who say they are 18 or
+    # older. It is only ever stored after the visitor confirmed that.
+    age_restricted: bool = False
 
     def quality(self, quality_id: str) -> QualityChoice:
         for choice in self.qualities:
@@ -162,16 +171,25 @@ class AnalysisService:
         return len(self._items)
 
     # ------------------------------------------------------------------ analyze
-    async def analyze(self, raw_url: str, client: ClientIdentity) -> Analysis:
+    async def analyze(self, raw_url: str, client: ClientIdentity, *, age_confirmed: bool = False) -> Analysis:
         validated = await validate_public_url(raw_url, self._policy)
-        return await self._light(client.key, lambda: self._analyze(validated.url, validated.host, client))
+        return await self._light(
+            client.key, lambda: self._analyze(validated.url, validated.host, client, age_confirmed=age_confirmed)
+        )
 
-    async def _analyze(self, url: str, host: str, client: ClientIdentity) -> Analysis:
+    async def _analyze(
+        self, url: str, host: str, client: ClientIdentity, *, age_confirmed: bool = False
+    ) -> Analysis:
+        # Without a confirmation this server does not offer 18+ videos at all, so the
+        # answer is given before a worker starts and before the source is contacted.
+        # The worker decides the rest with the confirmation it is given.
+        if not age_gate(self._settings):
+            age_confirmed = False
         analysis_id = secrets.token_urlsafe(18)
         directory = self._storage.create("analyses", analysis_id)
         started = time.monotonic()
         try:
-            task = self._base_task("analyze", directory) | {"url": url}
+            task = self._base_task("analyze", directory) | {"url": url, "age_confirmed": age_confirmed}
             result = await run_worker(
                 task, timeout=self._settings.analyze_timeout_seconds, timeout_code="source_timeout"
             )
@@ -258,13 +276,18 @@ class AnalysisService:
             subtitles=build_subtitles(info, ffmpeg_available=ffmpeg),
             notices=notices,
             thumbnail=thumbnail,
+            age_restricted=bool(result.get("age_restricted")),
         )
 
     # ------------------------------------------------------------------ lookups
-    def get(self, analysis_id: str) -> Analysis:
+    def get(self, analysis_id: str, *, age_confirmed: bool = False) -> Analysis:
         analysis = self._items.get(analysis_id)
         if analysis is None or analysis.expires_at <= time.time():
             raise AppError("analysis_expired")
+        # An id alone is not a confirmation: a thumbnail, a subtitle or a download of an
+        # 18+ video is handed out only to a visitor who says they are 18 or older.
+        if analysis.age_restricted and not (age_confirmed and age_gate(self._settings)):
+            raise AppError("age_confirmation_required", detail=f"analysis={analysis_id} age restricted")
         return analysis
 
     # ------------------------------------------------------------------ subtitles

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 
+import { ageConfirmed, forgetAge, rememberAge } from '../lib/ageConsent'
 import { ApiError, api, isAbort, toApiError, type Analysis, type Job, type Quality } from '../lib/api'
 
 /**
  * The whole download flow as one small state machine:
  *
  *   idle -> analyzing -> ready -> job (queued/running -> completed | failed | cancelled)
+ *                \-> askAge -> analyzing (with the answer)
  *                \-> error
  *
  * Every transition is driven by a real API response; nothing is simulated.
@@ -13,6 +15,8 @@ import { ApiError, api, isAbort, toApiError, type Analysis, type Job, type Quali
 export type Phase =
   | { name: 'idle' }
   | { name: 'analyzing'; url: string; startedAt: number }
+  /** The API says the video is for adults only: the visitor is asked before anything else happens. */
+  | { name: 'askAge'; url: string; adult: boolean }
   | { name: 'error'; url: string; error: ApiError }
   | { name: 'ready'; analysis: Analysis; startError: ApiError | null; starting: boolean }
   | {
@@ -37,6 +41,7 @@ interface State {
 type Action =
   | { type: 'analyze'; url: string }
   | { type: 'analyzed'; analysis: Analysis }
+  | { type: 'askAge'; url: string; adult: boolean }
   | { type: 'failed'; url: string; error: ApiError }
   | { type: 'reset' }
   | { type: 'selectQuality'; id: string }
@@ -88,6 +93,8 @@ function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'analyze':
       return { phase: { name: 'analyzing', url: action.url, startedAt: Date.now() }, qualityId: null, embedIds: [] }
+    case 'askAge':
+      return { phase: { name: 'askAge', url: action.url, adult: action.adult }, qualityId: null, embedIds: [] }
     case 'analyzed':
       return {
         phase: { name: 'ready', analysis: action.analysis, startError: null, starting: false },
@@ -132,6 +139,8 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+/** How long the visitor's answer counts on this device: six hours (the API's own default). */
+const AGE_REMEMBERED_SECONDS = 6 * 60 * 60
 const POLL_MS = 700
 const POLL_HIDDEN_MS = 2500
 const POLL_RETRY_MS = 3000
@@ -140,7 +149,15 @@ export interface Downloader {
   phase: Phase
   selectedQuality: Quality | null
   embedIds: string[]
+  /** Whether the visitor has said they are 18 or older (remembered by the browser). */
+  ageConfirmed: boolean
   analyze: (url: string) => void
+  /** The visitor said yes: remember it and read the link again. */
+  confirmAge: () => void
+  /** The visitor said no: forget any earlier yes and refuse this link. */
+  declineAge: () => void
+  /** Forget the answer, so the next adult video asks again. */
+  forgetAge: () => void
   /** Show why a link cannot be processed, without sending it. */
   refuse: (url: string, error: ApiError) => void
   cancelAnalyze: () => void
@@ -162,21 +179,32 @@ export function useDownloader(): Downloader {
     stateRef.current = state
   }, [state])
 
-  const analyze = useCallback((url: string) => {
+  const run = useCallback((url: string, adult: boolean) => {
     analyzeAbort.current?.abort()
     const controller = new AbortController()
     analyzeAbort.current = controller
     dispatch({ type: 'analyze', url })
     api
-      .analyze(url, controller.signal)
+      .analyze(url, { ageConfirmed: adult, signal: controller.signal })
       .then((analysis) => {
         if (!controller.signal.aborted) dispatch({ type: 'analyzed', analysis })
       })
       .catch((error: unknown) => {
         if (isAbort(error) || controller.signal.aborted) return
-        dispatch({ type: 'failed', url, error: toApiError(error) })
+        const apiError = toApiError(error)
+        if (apiError.code === 'age_confirmation_required') {
+          // The API says this video is for adults only. Ask; the answer goes into the
+          // request itself, and an earlier answer for another video is forgotten first,
+          // so the visitor really does decide each time.
+          if (adult) forgetAge()
+          dispatch({ type: 'askAge', url, adult })
+          return
+        }
+        dispatch({ type: 'failed', url, error: apiError })
       })
   }, [])
+
+  const analyze = useCallback((url: string) => run(url, ageConfirmed()), [run])
 
   const refuse = useCallback((url: string, error: ApiError) => {
     analyzeAbort.current?.abort()
@@ -193,7 +221,7 @@ export function useDownloader(): Downloader {
     const { phase } = stateRef.current
     // Leaving a job behind? Stop it (or delete its file) rather than abandon it on the server.
     if (phase.name === 'job' && (isActive(phase.job) || phase.job.status === 'completed')) {
-      void api.cancelJob(phase.job.id).catch(() => undefined)
+      void api.cancelJob(phase.job.id, ageConfirmed()).catch(() => undefined)
     }
     dispatch({ type: 'reset' })
   }, [])
@@ -203,17 +231,42 @@ export function useDownloader(): Downloader {
     if (phase.name !== 'ready' || phase.starting || !qualityId) return
     dispatch({ type: 'starting' })
     api
-      .createJob(phase.analysis.id, qualityId, embedIds)
+      .createJob(phase.analysis.id, qualityId, embedIds, ageConfirmed())
       .then((job) => dispatch({ type: 'job', job }))
       .catch((error: unknown) => dispatch({ type: 'startFailed', error: toApiError(error) }))
   }, [])
+
+  const confirmAge = useCallback(() => {
+    const { phase } = stateRef.current
+    if (phase.name !== 'askAge') return
+    rememberAge(AGE_REMEMBERED_SECONDS)
+    run(phase.url, true)
+  }, [run])
+
+  const declineAge = useCallback(() => {
+    const { phase } = stateRef.current
+    if (phase.name !== 'askAge') return
+    forgetAge()
+    // The refusal is answered here, in the API's own words, without asking again.
+    dispatch({
+      type: 'failed',
+      url: phase.url,
+      error: new ApiError(
+        'age_confirmation_required',
+        'This video is for adults only.',
+        { hint: 'It is only offered to visitors who confirm that they are 18 or older.', status: 403 },
+      ),
+    })
+  }, [])
+
+  const forget = useCallback(() => forgetAge(), [])
 
   const cancel = useCallback(() => {
     const { phase } = stateRef.current
     if (phase.name !== 'job' || phase.busy) return
     dispatch({ type: 'busy', busy: true })
     api
-      .cancelJob(phase.job.id)
+      .cancelJob(phase.job.id, ageConfirmed())
       .then((job) => dispatch({ type: 'job', job }))
       .catch((error: unknown) => {
         if (toApiError(error).code === 'job_not_found') dispatch({ type: 'jobGone' })
@@ -234,7 +287,7 @@ export function useDownloader(): Downloader {
     }
     const tick = async () => {
       try {
-        const job = await api.job(pollingId, controller.signal)
+        const job = await api.job(pollingId, { ageConfirmed: ageConfirmed(), signal: controller.signal })
         if (controller.signal.aborted) return
         dispatch({ type: 'job', job })
         if (isActive(job)) schedule(document.hidden ? POLL_HIDDEN_MS : POLL_MS)
@@ -265,7 +318,7 @@ export function useDownloader(): Downloader {
     let timer: number | undefined
     const check = () => {
       api
-        .job(finishedId, controller.signal)
+        .job(finishedId, { ageConfirmed: ageConfirmed(), signal: controller.signal })
         .then((job) => {
           dispatch({ type: 'job', job })
           if (job.status === 'completed') timer = window.setTimeout(check, 5000)
@@ -290,7 +343,11 @@ export function useDownloader(): Downloader {
     phase,
     selectedQuality,
     embedIds: state.embedIds,
+    ageConfirmed: ageConfirmed(),
     analyze,
+    confirmAge,
+    declineAge,
+    forgetAge: forget,
     refuse,
     cancelAnalyze,
     reset,

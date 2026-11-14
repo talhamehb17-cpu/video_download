@@ -54,6 +54,13 @@ NO_SUBS_PAGE = """<!doctype html>
 <body><video controls><source src="/media/v240.mp4" type="video/mp4" res="240"></video></body></html>
 """
 
+# A page like the ones Reddit and Dailymotion show: the video is only there for a
+# visitor who said yes to "are you over 18?". A reader answers that question with a
+# cookie, so the video can be read without any account, and the reader labels it 18+.
+# The page itself has no "18+" label inside it.
+QUESTION = "<p>This video is for adults only. By continuing you confirm you are over 18.</p>"
+QUESTION_PAGE = WATCH_PAGE.replace("<video controls", f"{QUESTION}\n    <video controls")
+
 # The same public page, carrying the machine-readable "restricted to adults" label that
 # websites put on themselves. Readers report it as an 18+ rating. Nobody has to sign
 # in to watch it, and the clip is the usual synthetic one.
@@ -79,6 +86,9 @@ def create_app(root: Path, *, internal_port: int = 9) -> Starlette:
 
     async def watch_rated(_: Request) -> Response:
         return HTMLResponse(RATED_PAGE)
+
+    async def watch_question(_: Request) -> Response:
+        return HTMLResponse(QUESTION_PAGE)
 
     async def watch_webm(_: Request) -> Response:
         return HTMLResponse(WEBM_PAGE)
@@ -156,6 +166,7 @@ def create_app(root: Path, *, internal_port: int = 9) -> Starlette:
             Route("/watch/demo", watch),
             Route("/watch/webm", watch_webm),
             Route("/watch/rated", watch_rated),
+            Route("/watch/question", watch_question),
             Route("/watch/nosubs", watch_nosubs),
             Route("/article", article),
             Route("/redirect/internal", redirect_internal),

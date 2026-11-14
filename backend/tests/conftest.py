@@ -113,10 +113,12 @@ async def live(make_client: Callable[..., Any], source: str) -> httpx.AsyncClien
     return await make_client(unsafe_allow_hosts=[f"127.0.0.1:{port}"], max_file_size_mb=64)
 
 
-async def wait_for_job(client: httpx.AsyncClient, job_id: str, *, timeout: float = 60) -> dict[str, Any]:
+async def wait_for_job(
+    client: httpx.AsyncClient, job_id: str, *, timeout: float = 60, headers: dict[str, str] | None = None
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        job = (await client.get(f"/api/v1/jobs/{job_id}")).json()
+        job = (await client.get(f"/api/v1/jobs/{job_id}", headers=headers)).json()
         if job["status"] not in ("queued", "running"):
             return job
         await asyncio.sleep(0.05)

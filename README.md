@@ -42,9 +42,14 @@ the live site is checked.
 - **Real progress**: percentage, speed and time left as reported by the download, plus cancel at any moment.
 - **Temporary files.** A finished file is deleted after a set time (30 minutes by default) or immediately with
   "Delete now". Nothing is kept after a restart.
-- **Clear failures.** Private and paid videos, videos behind a platform's sign-in or age check, region-locked,
-  DRM-protected and live content are declined with a specific message. So are invalid links, platforms that
-  are switched off and websites that are not on the list.
+- **An age question, asked once.** A video that is for adults only (an 18+ post on Reddit, explicit on
+  Dailymotion, age-restricted on YouTube) asks the visitor whether they are 18 or older. A yes is remembered in
+  the browser, and the platform's own age check is then answered for that visitor, so the video can be read; a
+  no declines it. Video that a platform gives to everybody is never asked about. See
+  [Age checks and age labels](#age-checks-and-age-labels).
+- **Clear failures.** Private and paid videos, videos behind a plain sign-in, region-locked, DRM-protected and
+  live content are declined with a specific message. So are invalid links, platforms that are switched off and
+  websites that are not on the list.
 - **An admin panel** for the operator: switch platforms on and off, add websites, check what really works
   from your server, and watch disk space and recent errors. See [Admin panel](#admin-panel).
 - **No account, no tracking.** No cookies, analytics or third-party scripts. Fonts are served by the site itself.
@@ -112,42 +117,55 @@ The policy is set with environment variables on the API:
 | `SOURCE_POLICY=allowlist` | Accept only the domains in `ALLOWED_DOMAINS` (sub-domains included). The admin panel's switches have no effect. The cautious choice: the default list is five sources that publish their videos for download and reuse (Internet Archive, Wikimedia Commons, media.ccc.de, NASA, Blender). |
 | `SOURCE_POLICY=open` | Accept every public source the extractor can read, except platforms that are switched off. |
 | `BLOCKED_DOMAINS=example.com` | Always refuse these, in every mode. |
-| `BLOCK_AGE_RESTRICTED=true` | Also decline every video that carries an 18+ label. Off by default, see [Age checks and age labels](#age-checks-and-age-labels). |
+| `BLOCK_AGE_RESTRICTED=true` | Decline every video that carries an 18+ label, and never ask. Off by default, see [Age checks and age labels](#age-checks-and-age-labels). |
+| `AGE_CONFIRMATION=false` | Never offer a video that is for adults only, and never ask. On by default. |
 
 Whatever the policy, Lumora never signs in, never uses cookies from an account or a browser, never works
 around a paywall, region lock or bot check, and never circumvents DRM. Age checks are handled as follows.
 
 ### Age checks and age labels
 
-These are two different things, and Lumora treats them differently.
+**The visitor decides, once.** A video that is for adults only is offered after the visitor in the browser
+confirms that they are 18 or older, and to nobody else. The question is not a formality: it appears only when
+the platform itself says the video is for adults, and a no declines the link. Only after that answer does the
+reader meet the platform's check: it answers an age question the way any visitor's browser does, and it never
+signs in to an account. Nobody is asked twice, and a link copied out of the page carries no answer.
 
-**The platform asks.** A video that a platform only gives after a sign-in or an age confirmation is always
-declined, with a message that says why. No setting changes this. It covers:
+A video is for adults only when:
 
-- Videos that need an account: age-restricted videos on YouTube, posts that X shows only to signed-in adults.
-  This includes a YouTube video that the reader could still get through an embedded player.
-- Videos behind an "are you over 18?" question: posts that Reddit marks 18+, videos that Dailymotion marks
-  as explicit. The readers for these platforms answer that question by themselves. Lumora does not pass the
-  answer on: such a video is declined.
-- The same on websites outside the list whose readers confirm an age themselves. The readers concerned are
-  named in `AGE_QUESTION_ANSWERED_BY_READER` in
-  [`backend/app/worker/tasks.py`](backend/app/worker/tasks.py), and a test compares that list with the
-  installed readers.
+- the platform asks for an age before it shows it: posts that Reddit marks 18+, videos that Dailymotion marks
+  as explicit. Their readers answer that question with a cookie of their own, so the video can be read without
+  any account — but only for a visitor who has said yes;
+- the platform asks for a sign-in to confirm an age: age-restricted YouTube videos, including the ones the
+  reader could still reach through an embedded player, and posts X shows only to signed-in adults;
+- the same happens on websites outside the list whose readers confirm an age themselves. The readers concerned
+  are named in `AGE_QUESTION_ANSWERED_BY_READER` in [`backend/app/worker/tasks.py`](backend/app/worker/tasks.py),
+  and a test compares that list with the installed readers.
 
-**The platform only labels.** Many platforms put an 18+ label on videos that they give to everybody:
-"sensitive" on X, "mature" on Kick or Imgur, "NSFW" on 9GAG or Tumblr, "explicit" in a podcast feed. The label
-alone declines nothing. Lumora does not sign in, and what a platform gives without a sign-in is treated as
-public; where the reader had to confirm an age to get that far, the label says so and the video is declined
-(above). Ratings below 18 are never a reason to decline.
+How the answer travels:
 
-What this default means in practice:
+- The website asks the question in place of the video, once per browser: the answer is kept for six hours
+  (`AGE_CONFIRMATION_TTL_SECONDS` on the API, at most a day in the browser) and can be withdrawn at any time.
+- Every request that touches the video carries the answer: `X-Lumora-Age-Confirmed: true` (or `age_confirmed` in
+  the body of `POST /api/v1/analyze` and `POST /api/v1/jobs`). An analysis id, a subtitle link or a download
+  link copied out of the page does not include it, and is refused with `age_confirmation_required`.
+- The API keeps no record of who confirmed anything: no cookie, no account, no stored address.
+
+Two settings. `BLOCK_AGE_RESTRICTED=true` restores the old, stricter rule: every 18+ label declines a video,
+the question is never asked, and a confirmation in a request cannot overrule it. `AGE_CONFIRMATION=false` never
+offers a video that is for adults only, and never asks.
+
+**The label alone.** Many platforms put an 18+ label on videos that they give to everybody: "sensitive" on X,
+"mature" on Kick or Imgur, "NSFW" on 9GAG or Tumblr, "explicit" in a podcast feed. Such a video is processed
+without a question, because nobody had to pass an age check to get it. Ratings below 18 are never a reason to
+ask or to decline.
+
+What this means in practice:
 
 - Some platforms hide labelled videos on their own pages from visitors who are not signed in, and still give
   them to any program that asks. Lumora accepts those.
-- With `SOURCE_POLICY=open`, websites for adults are accepted like any other website, unless their reader
-  has to confirm an age.
-- `BLOCK_AGE_RESTRICTED=true` declines every video with an 18+ label instead. It is the cautious choice for a
-  service that is open to everybody.
+- With `SOURCE_POLICY=open`, websites for adults are accepted like any other website; their videos that need an
+  age confirmation are offered after the visitor's answer, like anywhere else.
 
 Two more things to know:
 
@@ -155,7 +173,9 @@ Two more things to know:
   confirms an age for every trailer and labels none, so with `SOURCE_POLICY=open` those are not caught.
 - YouTube asks a viewer to confirm a content warning before it plays some videos. The reader confirms that
   warning by itself, in every request it sends. A video that YouTube gives to any viewer is accepted; one that
-  YouTube age-restricts as well carries the 18+ label and is declined.
+  YouTube age-restricts as well carries the 18+ label and is offered only after the visitor's confirmation.
+- The visitor's answer is their own word, kept in their browser. It is not an account, not a check of an
+  identity document, and it cannot be enforced against someone who lies about it.
 
 ## Admin panel
 
@@ -322,7 +342,7 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now lumora-api.service
-curl -s http://127.0.0.1:8000/health          # {"status":"ok","version":"1.1.0","ffmpeg":true,...}
+curl -s http://127.0.0.1:8000/health          # {"status":"ok","version":"1.2.0","ffmpeg":true,...}
 ```
 
 One process (`--workers 1`) is required: jobs, their progress and their files belong to the process that
@@ -349,7 +369,9 @@ Version 1.1 added the platform list and the admin panel. When updating from 1.0,
 | --- | --- |
 | `SOURCE_POLICY` | Set it to `platforms`, or remove the line. If it still says `allowlist`, only `ALLOWED_DOMAINS` are accepted and the admin panel's switches do nothing. If it says `open`, every website the reader knows stays accepted, the site cannot tell visitors in advance what will work, and the admin panel can only switch platforms off. |
 | `MAX_FILE_SIZE_MB` | The default is now `1536` (1.5 GB). A line with an older value keeps the older limit: change or remove it. |
-| `BLOCK_AGE_RESTRICTED` | The default is now `false`: an 18+ label alone no longer declines a video that the platform shows to everybody. A line that says `true` keeps the old rule: remove it unless you want that. Videos behind a platform's age check are declined either way. |
+| `BLOCK_AGE_RESTRICTED` | 1.1 made the default `false`; 1.2 asks the visitor instead. A line that says `true` keeps the strict rule: every 18+ label declines a video, and the visitor is never asked. Remove it unless you want that. |
+| `AGE_CONFIRMATION` | New, default `true`: a video that is for adults only is offered after the visitor confirms their age. Set it to `false` to offer no such video and ask nothing. |
+| `AGE_CONFIRMATION_TTL_SECONDS` | New, default `21600` (six hours): how long one visitor's answer counts for. |
 | `DATA_DIR` | New. Create a folder only the service's user can read (`sudo install -d -m 700 -o <user> -g <user> /var/lib/lumora`) and point this to it. |
 | `ADMIN_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | New. Both must be set for the admin panel to exist. |
 | `MIN_FREE_DISK_MB` | New, default `1024`. No download starts, and a running one stops, before free space would fall below this. A 1.5 GB download that needs merging reserves about 3 GB while it runs, so check `df -h` for the disk that holds `STORAGE_DIR`. |
@@ -432,7 +454,9 @@ comments; the ones you are most likely to change:
 | `SOURCE_POLICY` | `platforms` | `platforms`, `allowlist` or `open`. See [Platforms and source policy](#platforms-and-source-policy). |
 | `ALLOWED_DOMAINS` | five open sources | Domains accepted in `allowlist` mode. |
 | `BLOCKED_DOMAINS` | empty | Domains refused in every mode. |
-| `BLOCK_AGE_RESTRICTED` | `false` | `true` declines every video with an 18+ label, not only those behind a platform's age check. See [Age checks and age labels](#age-checks-and-age-labels). |
+| `BLOCK_AGE_RESTRICTED` | `false` | `true` declines every video with an 18+ label and never asks the visitor. See [Age checks and age labels](#age-checks-and-age-labels). |
+| `AGE_CONFIRMATION` | `true` | `false` offers no video that is for adults only, and asks nothing. |
+| `AGE_CONFIRMATION_TTL_SECONDS` | `21600` | How long a visitor's answer counts for, in seconds (at most 30 days; the browser keeps one day at most). |
 | `EXAMPLE_LINKS` | two open films | "Try an example" links: `Label \| Source \| URL` entries separated by `;`. |
 | `ADMIN_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | unset | Both set = the [admin panel](#admin-panel) exists. The password is only the initial one. |
 | `DATA_DIR` | `backend/data` | Where the admin account and platform settings are kept. Must survive restarts. |
@@ -543,13 +567,17 @@ Interactive documentation is at `/docs` when `ENABLE_DOCS=true`.
 | `GET /health` | Liveness, version, FFmpeg availability, job counts. |
 | `GET /api/v1/config` | Limits, capabilities, source policy and example links. |
 | `GET /api/v1/platforms` | Every platform with its status, its limits, whether links are accepted now, and whether a check on this server has read a video from it. |
-| `POST /api/v1/analyze` `{url}` | Analyze a link: platform, title, duration, qualities, subtitles. |
+| `POST /api/v1/analyze` `{url, age_confirmed?}` | Analyze a link: platform, title, duration, qualities, subtitles, `age_restricted`. |
 | `GET /api/v1/analyses/{id}/thumbnail` | Preview image. |
 | `GET /api/v1/analyses/{id}/subtitles/{track}?format=srt\|vtt` | One subtitle track as a file. |
-| `POST /api/v1/jobs` `{analysis_id, quality_id, embed_subtitles[]}` | Start a download. |
+| `POST /api/v1/jobs` `{analysis_id, quality_id, embed_subtitles[], age_confirmed?}` | Start a download. |
 | `GET /api/v1/jobs/{id}` | Status and progress. |
 | `DELETE /api/v1/jobs/{id}` | Cancel a running job, or delete a finished file. |
 | `GET /api/v1/jobs/{id}/file` | The finished file. Supports range requests. |
+
+About age: every request that touches an 18+ video needs the visitor's own answer, either as
+`X-Lumora-Age-Confirmed: true` or as `age_confirmed: true` in the body of the two `POST`s. Without it they answer
+`403` with `age_confirmation_required`, which is an invitation to ask the visitor, not a closed door.
 
 The administrator's endpoints live under `/api/v1/admin` and need `Authorization: Bearer <token>` from
 `POST /api/v1/admin/login`. They are not part of the published documentation;
@@ -634,8 +662,10 @@ storage. Each lives in one module (`services/jobs.py`, `services/storage.py`). V
 | "… isn't a platform this service works with" / "This website isn't enabled on this service" | The link's website is not on the platform list. Add it in the admin panel, or see [Platforms and source policy](#platforms-and-source-policy). |
 | "… is switched off on this service" | The administrator switched that platform off. |
 | "This source requires signing in to view the video" / "The source is asking for a human verification or sign-in check" | The platform turned the server away. Lumora never signs in or works around this. Run the platform's check in the admin panel to see whether any public link works from your server. |
-| "The platform only shows this video after a sign-in or age check" | The platform asks for an account or an age confirmation before it shows this video: age-restricted on YouTube, marked 18+ on Reddit, explicit on Dailymotion. Lumora never signs in and never confirms an age for a visitor, and no setting changes it. |
-| "This video carries an 18+ label" | `BLOCK_AGE_RESTRICTED=true` is set on the API, so a video is declined for its label although the platform shows it to everybody. Remove the line and restart if you do not want that. |
+| "This video is for adults only" with the age question | Normal: the platform offers this video only after an age check, so the visitor is asked first. A visitor who says no sees "It is only offered to visitors who confirm that they are 18 or older". |
+| "This video is for adults only" and no question appears | The API is older than 1.2, or `AGE_CONFIRMATION=false` / `BLOCK_AGE_RESTRICTED=true` is set on it. Update the API, or remove that line. |
+| "This video carries an 18+ label" | `BLOCK_AGE_RESTRICTED=true` is set on the API, so every label declines and nobody is asked. Remove the line and restart if you do not want that. |
+| The age question comes back on every link | The browser refuses to keep the answer (private mode, or cookies cleared). The visitor's word cannot be remembered there. |
 | Only five sources work after updating to 1.1 | `SOURCE_POLICY=allowlist` is still set on the API. Set `platforms` and restart. The admin panel shows a warning while this is the case. |
 | Admin page: "The API needs an update first" | The API is older than 1.1. Update it ([Deploying](#deploying)). |
 | Admin page: "The admin panel is switched off on the server" | `ADMIN_EMAIL` or `ADMIN_BOOTSTRAP_PASSWORD` is not set on the API. |

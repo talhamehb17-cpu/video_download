@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 
 import type { Downloader } from '../../hooks/useDownloader'
 import { Link } from '../../lib/Link'
+import { AgeCard } from './AgeCard'
 import { AnalyzingCard } from './AnalyzingCard'
 import { ErrorCard } from './ErrorCard'
 import { JobPanel } from './JobPanel'
@@ -36,6 +37,16 @@ export function ProcessingArea({ downloader, platformCount, onStartOver }: Proce
     case 'analyzing':
       content = <AnalyzingCard url={phase.url} startedAt={phase.startedAt} onCancel={downloader.cancelAnalyze} />
       break
+    case 'askAge':
+      key = `ask-age-${phase.url}`
+      content = (
+        <AgeCard
+          url={phase.url}
+          onConfirm={downloader.confirmAge}
+          onDecline={downloader.declineAge}
+        />
+      )
+      break
     case 'error':
       content = (
         <ErrorCard
@@ -53,8 +64,13 @@ export function ProcessingArea({ downloader, platformCount, onStartOver }: Proce
               </>
             ) : undefined
           }
-          // Only offer "Try again" when asking again could change the answer.
-          onRetry={phase.error.retryable ? () => downloader.analyze(phase.url) : undefined}
+          // Only offer "Try again" when asking again could change the answer. A refusal for
+          // age is answered by the question, not by repeating the same request.
+          onRetry={
+            phase.error.retryable && phase.error.code !== 'age_confirmation_required'
+              ? () => downloader.analyze(phase.url)
+              : undefined
+          }
           onDismiss={onStartOver}
         />
       )
@@ -113,7 +129,13 @@ export function ProcessingArea({ downloader, platformCount, onStartOver }: Proce
   }, [key])
 
   return (
-    <div ref={container} id="download" className="mx-auto mt-8 max-w-4xl scroll-mt-4" aria-live="polite">
+    <div
+      ref={container}
+      id="download"
+      data-analysis={phase.name === 'ready' || phase.name === 'job' ? phase.analysis.id : undefined}
+      className="mx-auto mt-8 max-w-4xl scroll-mt-4"
+      aria-live="polite"
+    >
       <AnimatePresence mode="wait" initial={false}>
         {content && (
           <m.div

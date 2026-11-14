@@ -137,7 +137,8 @@ export function Hero({ service, onRetryService, url, onUrlChange, onSubmit, busy
         )}
 
         <p className="mx-auto mt-5 max-w-2xl text-[13px] leading-relaxed text-ink-mute">
-          {sourcesNote} Videos that are private, paid, behind a sign-in or age check, region-locked or DRM-protected are never processed.
+          {sourcesNote} Videos that are private, paid, region-locked or DRM-protected are never processed, and a
+          video that is for adults only asks for your confirmation first.
         </p>
       </m.div>
 

@@ -197,6 +197,18 @@ def test_a_check_that_learned_nothing_changes_no_status() -> None:
     assert site.status == "requires_review" and not site.enabled
 
 
+def test_a_platform_whose_video_needs_an_age_is_still_supported() -> None:
+    # The server could read the video; only a visitor who confirmed their age would get it.
+    result = {"integrations": ["Reddit"], "attempts": [{
+        "url": "https://www.reddit.com/r/videos/comments/abc/", "ok": True, "extractor": "Reddit",
+        "title": "A clip", "streams": 2, "max_height": 720, "video": True, "subtitles": 0,
+        "age_restricted": True,
+    }]}
+    check = interpret(result, given_url=None, seconds=1.2, catalogued=True)
+    assert check.status == "supported" and check.conclusive
+    assert "adults only" in check.summary and "confirm their age" in check.summary
+
+
 def test_sample_links_are_the_platforms_own_ordinary_pages() -> None:
     from urllib.parse import urlsplit
 

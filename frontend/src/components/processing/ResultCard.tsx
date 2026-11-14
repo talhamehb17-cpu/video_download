@@ -1,7 +1,8 @@
-import { ArrowDownToLine, Clock, Globe, ImageOff, Info, User, X } from 'lucide-react'
-import { useState } from 'react'
+import { ArrowDownToLine, Clock, Globe, ImageOff, Info, ShieldCheck, User, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 
-import { apiUrl, type Analysis, type ApiError, type Quality } from '../../lib/api'
+import { ageConfirmed } from '../../lib/ageConsent'
+import { api, type Analysis, type ApiError, type Quality } from '../../lib/api'
 import { formatBytes, formatDuration } from '../../lib/format'
 import { Button } from '../ui/Button'
 import { QualitySelector } from './QualitySelector'
@@ -19,15 +20,43 @@ interface ResultCardProps {
   onReset: () => void
 }
 
-/** Poster with a fixed 16:9 box, so nothing shifts when the image arrives (or fails). */
+/**
+ * Poster with a fixed 16:9 box, so nothing shifts when the image arrives (or fails).
+ *
+ * The image is fetched in the page rather than by an `<img src>`: for a video that is
+ * for adults only, the preview needs the visitor's answer too, and an image request
+ * cannot carry it.
+ */
 export function Poster({ analysis }: { analysis: Analysis }) {
   const [failed, setFailed] = useState(false)
+  const [src, setSrc] = useState<string | null>(null)
   const duration = formatDuration(analysis.duration)
+
+  useEffect(() => {
+    if (!analysis.thumbnail_url) return
+    let url: string | null = null
+    let live = true
+    api
+      .thumbnail(analysis.id, ageConfirmed())
+      .then((blob) => {
+        if (!live) return
+        url = URL.createObjectURL(blob)
+        setSrc(url)
+      })
+      .catch(() => {
+        if (live) setFailed(true)
+      })
+    return () => {
+      live = false
+      if (url) URL.revokeObjectURL(url)
+    }
+  }, [analysis.id, analysis.thumbnail_url])
+
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-line bg-bg-soft">
-      {analysis.thumbnail_url && !failed ? (
+      {src && !failed ? (
         <img
-          src={apiUrl(analysis.thumbnail_url)}
+          src={src}
           alt=""
           width={640}
           height={360}
@@ -120,6 +149,13 @@ export function ResultCard({
               </li>
             )}
           </ul>
+          {analysis.age_restricted && (
+            <p className="mt-3 flex gap-2 rounded-xl border border-warn/25 bg-warn/8 px-3 py-2 text-[13px] text-ink-soft">
+              <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-warn" aria-hidden />
+              The platform offers this video to adults only. It is here because you confirmed that you are 18 or
+              older; the answer is kept in this browser.
+            </p>
+          )}
           {analysis.notices.map((notice) => (
             <p key={notice.code} className="mt-3 flex gap-2 rounded-xl border border-blue/25 bg-blue/8 px-3 py-2 text-[13px] text-ink-soft">
               <Info className="mt-0.5 size-3.5 shrink-0 text-blue" aria-hidden />

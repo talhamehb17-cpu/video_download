@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Header, Path, Query
 from fastapi.responses import FileResponse
 
 from app import schemas
@@ -41,6 +41,19 @@ def _check_id(value: str, missing: str) -> str:
     return value
 
 
+def _age_confirmed(header: Annotated[str | None, Header(alias=schemas.AGE_CONFIRMATION_HEADER)] = None) -> bool:
+    """The visitor's statement that they are 18 or older, from the request itself.
+
+    Every request that hands out any part of a video carries it (see
+    ``AGE_CONFIRMATION_HEADER``). It is not tied to an address, an account or a cookie,
+    and the API keeps no record of who sent it.
+    """
+    return (header or "").strip().lower() in ("true", "1")
+
+
+AgeConfirmed = Annotated[bool, Depends(_age_confirmed)]
+
+
 # --------------------------------------------------------------------------------- meta
 @meta.get("/health", response_model=schemas.HealthResponse, summary="Liveness probe")
 @api.get("/health", response_model=schemas.HealthResponse, tags=["meta"], summary="Service health")
@@ -72,8 +85,9 @@ async def analyze(
     body: schemas.AnalyzeRequest,
     services: ServicesDep,
     client: Annotated[ClientIdentity, Depends(rate_limited("analyze"))],
+    confirmed: AgeConfirmed = False,
 ) -> schemas.AnalysisResponse:
-    analysis = await services.analyses.analyze(body.url, client)
+    analysis = await services.analyses.analyze(body.url, client, age_confirmed=body.age_confirmed or confirmed)
     return analysis_response(analysis, services.platforms)
 
 
@@ -82,9 +96,10 @@ async def analyze(
     summary="Poster image of an analyzed video",
 )
 async def thumbnail(
-    analysis_id: AnalysisId, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("files"))]
+    analysis_id: AnalysisId, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("files"))],
+    confirmed: AgeConfirmed = False,
 ) -> FileResponse:
-    analysis = services.analyses.get(_check_id(analysis_id, "analysis_expired"))
+    analysis = services.analyses.get(_check_id(analysis_id, "analysis_expired"), age_confirmed=confirmed)
     if analysis.thumbnail is None or not analysis.thumbnail[0].is_file():
         raise AppError("option_not_found")
     path, media_type = analysis.thumbnail
@@ -104,8 +119,9 @@ async def subtitle(
     services: ServicesDep,
     client: Annotated[ClientIdentity, Depends(rate_limited("files"))],
     format: Annotated[Literal["srt", "vtt"], Query(description="Subtitle file format")] = "srt",
+    confirmed: AgeConfirmed = False,
 ) -> FileResponse:
-    analysis = services.analyses.get(_check_id(analysis_id, "analysis_expired"))
+    analysis = services.analyses.get(_check_id(analysis_id, "analysis_expired"), age_confirmed=confirmed)
     path = await services.analyses.subtitle_file(analysis, track_id, format, client)
     track = analysis.subtitle(track_id)
     suffix = track.language if track.kind == "manual" else f"{track.language} auto"
@@ -126,8 +142,9 @@ async def create_job(
     body: schemas.JobCreateRequest,
     services: ServicesDep,
     client: Annotated[ClientIdentity, Depends(rate_limited("jobs"))],
+    confirmed: AgeConfirmed = False,
 ) -> schemas.JobResponse:
-    analysis = services.analyses.get(body.analysis_id)
+    analysis = services.analyses.get(body.analysis_id, age_confirmed=body.age_confirmed or confirmed)
     quality = analysis.quality(body.quality_id)
     tracks = [analysis.subtitle(track_id) for track_id in dict.fromkeys(body.embed_subtitles)]
     job = services.jobs.create(analysis, quality, tracks, client)
@@ -137,18 +154,24 @@ async def create_job(
 @api.get("/jobs/{job_id}", response_model=schemas.JobResponse, responses=ERRORS, tags=["jobs"],
          summary="Progress and result of a job")
 async def get_job(
-    job_id: JobId, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("status"))]
+    job_id: JobId, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("status"))],
+    confirmed: AgeConfirmed = False,
 ) -> schemas.JobResponse:
     job = services.jobs.get(_check_id(job_id, "job_not_found"))
+    if job.age_restricted and not confirmed:
+        raise AppError("age_confirmation_required", detail=f"job={job_id} age restricted")
     return job_response(job, services.jobs)
 
 
 @api.delete("/jobs/{job_id}", response_model=schemas.JobResponse, responses=ERRORS, tags=["jobs"],
             summary="Cancel a job, or delete its finished file immediately")
 async def cancel_job(
-    job_id: JobId, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("default"))]
+    job_id: JobId, services: ServicesDep, _: Annotated[ClientIdentity, Depends(rate_limited("default"))],
+    confirmed: AgeConfirmed = False,
 ) -> schemas.JobResponse:
     job = services.jobs.get(_check_id(job_id, "job_not_found"))
+    if job.age_restricted and not confirmed:
+        raise AppError("age_confirmation_required", detail=f"job={job_id} age restricted")
     await services.jobs.cancel(job)
     return job_response(job, services.jobs)
 
@@ -158,8 +181,11 @@ async def cancel_job(
 async def job_file(
     job_id: JobId, services: ServicesDep, client: ClientDep,
     _: Annotated[ClientIdentity, Depends(rate_limited("files"))],
+    confirmed: AgeConfirmed = False,
 ) -> FileResponse:
     job = services.jobs.get(_check_id(job_id, "job_not_found"))
+    if job.age_restricted and not confirmed:
+        raise AppError("age_confirmation_required", detail=f"job={job_id} age restricted")
     if job.status in (JobStatus.EXPIRED, JobStatus.DELETED):
         raise AppError("file_expired")
     if job.status is not JobStatus.COMPLETED or job.file_path is None or job.file_name is None:

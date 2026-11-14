@@ -32,22 +32,26 @@ def streams(path: Path) -> list[str]:
     return [match.group(0) for match in found if match]
 
 
-async def analyze(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
-    response = await client.post("/api/v1/analyze", json={"url": url})
+# The confirmation a browser sends after the visitor says they are 18 or older.
+ADULT = {"X-Lumora-Age-Confirmed": "true"}
+
+
+async def analyze(client: httpx.AsyncClient, url: str, *, adult: bool = False) -> dict[str, Any]:
+    response = await client.post("/api/v1/analyze", json={"url": url}, headers=ADULT if adult else None)
     assert response.status_code == 200, response.text
     return response.json()
 
 
 async def start_job(client: httpx.AsyncClient, analysis: dict[str, Any], quality: dict[str, Any],
-                    embed: list[str] | None = None) -> dict[str, Any]:
+                    embed: list[str] | None = None, *, adult: bool = False) -> dict[str, Any]:
     payload = {"analysis_id": analysis["id"], "quality_id": quality["id"], "embed_subtitles": embed or []}
-    response = await client.post("/api/v1/jobs", json=payload)
+    response = await client.post("/api/v1/jobs", json=payload, headers=ADULT if adult else None)
     assert response.status_code == 202, response.text
     return response.json()
 
 
-async def fetch_file(client: httpx.AsyncClient, job: dict[str, Any], tmp_path: Path) -> Path:
-    response = await client.get(job["file"]["url"])
+async def fetch_file(client: httpx.AsyncClient, job: dict[str, Any], tmp_path: Path, *, adult: bool = False) -> Path:
+    response = await client.get(job["file"]["url"], headers=ADULT if adult else None)
     assert response.status_code == 200
     assert response.headers["content-disposition"].startswith("attachment;")
     assert len(response.content) == job["file"]["size"]
@@ -111,6 +115,7 @@ async def test_a_public_video_with_an_adult_label_is_processed_like_any_other(
     # The page labels itself 18+ and anyone can watch it without signing in: the label alone is no reason to decline.
     analysis = await analyze(live, f"{source}/watch/rated")
     assert analysis["title"] == "Lumora sample clip"
+    assert analysis["age_restricted"] is False
     assert [q["label"] for q in analysis["qualities"]] == ["720p", "360p", "240p"]
     assert [s["language"] for s in analysis["subtitles"]] == ["en", "es", "fr"]
     smallest = analysis["qualities"][-1]
@@ -119,18 +124,77 @@ async def test_a_public_video_with_an_adult_label_is_processed_like_any_other(
     assert any("Video" in line for line in streams(await fetch_file(live, job, tmp_path)))
 
 
+async def test_every_part_of_an_adult_video_asks_again(
+    live: httpx.AsyncClient, source: str, tmp_path: Path
+) -> None:
+    """An id alone is not a confirmation.
+
+    The reader of the sample source reports no age (it is a plain page; a Reddit post is
+    what has one), so the analysis is prepared and then marked the way the worker marks
+    a video whose platform asks for an age: the parts below it must all ask again.
+    """
+    analysis = await analyze(live, f"{source}/watch/demo")
+    live.app.state.services.analyses.get(analysis["id"]).age_restricted = True   # type: ignore[attr-defined]
+    quality = analysis["qualities"][-1]
+
+    assert (await live.get(analysis["thumbnail_url"])).status_code == 403
+    assert (await live.get(analysis["thumbnail_url"], headers=ADULT)).status_code == 200
+    expired = await live.get(f"/api/v1/analyses/{analysis['id']}/subtitles/{analysis['subtitles'][0]['id']}")
+    assert expired.status_code == 403
+    created = await live.post("/api/v1/jobs", json={"analysis_id": analysis["id"], "quality_id": quality["id"]})
+    assert created.status_code == 403, created.text
+    assert created.json()["error"]["code"] == "age_confirmation_required"
+
+    job = await start_job(live, analysis, quality, adult=True)
+    assert (await live.get(f"/api/v1/jobs/{job['id']}")).status_code == 403
+    assert (await live.get(f"/api/v1/jobs/{job['id']}", headers=ADULT)).status_code == 200
+    done = await wait_for_job(live, job["id"], headers=ADULT)
+    assert done["status"] == "completed", done
+    assert (await live.get(done["file"]["url"])).status_code == 403
+    assert any("Video" in line for line in streams(await fetch_file(live, done, tmp_path, adult=True)))
+
+
+async def test_the_same_video_with_the_field_instead_of_the_header(live: httpx.AsyncClient, source: str) -> None:
+    body = {"url": f"{source}/watch/demo", "age_confirmed": True}
+    analysis = (await live.post("/api/v1/analyze", json=body)).json()
+    live.app.state.services.analyses.get(analysis["id"]).age_restricted = True   # type: ignore[attr-defined]
+    quality = analysis["qualities"][-1]
+    created = await live.post(
+        "/api/v1/jobs", json={"analysis_id": analysis["id"], "quality_id": quality["id"], "age_confirmed": True}
+    )
+    assert created.status_code == 202, created.text
+    assert (await wait_for_job(live, created.json()["id"], headers=ADULT))["status"] == "completed"
+    # the answer is only true for the request that says so
+    assert (await live.post("/api/v1/jobs", json={"analysis_id": analysis["id"], "quality_id": quality["id"]})
+            ).status_code == 403
+
+
 async def test_the_strict_setting_declines_the_same_page_and_says_why(
     make_client: Callable[..., Any], source: str
 ) -> None:
     port = source.rsplit(":", 1)[1]
     strict = await make_client(unsafe_allow_hosts=[f"127.0.0.1:{port}"], block_age_restricted=True)
-    response = await strict.post("/api/v1/analyze", json={"url": f"{source}/watch/rated"})
+    # A confirmation cannot overrule the operator, and the video is not read at all.
+    response = await strict.post("/api/v1/analyze", json={"url": f"{source}/watch/rated"}, headers=ADULT)
     assert response.status_code == 422, response.text
     error = response.json()["error"]
-    assert error["code"] == "age_rating_blocked" and "18+" in error["message"] and "This service" in error["hint"]
+    assert error["code"] == "age_rating_blocked" and "18+" in error["message"] and "not set up" in error["hint"]
     assert list((storage(strict) / "analyses").iterdir()) == []       # nothing left behind
     # a page without the label is untouched by the setting
     assert (await strict.post("/api/v1/analyze", json={"url": f"{source}/watch/demo"})).status_code == 200
+
+
+async def test_a_service_without_age_videos_never_asks(
+    make_client: Callable[..., Any], live: httpx.AsyncClient
+) -> None:
+    assert (await live.get("/api/v1/config")).json()["capabilities"]["age_confirmation"] is True
+    quiet = await make_client(age_confirmation=False)
+    assert (await quiet.get("/api/v1/config")).json()["capabilities"]["age_confirmation"] is False
+
+
+async def test_the_configuration_says_whether_an_age_is_asked(live: httpx.AsyncClient) -> None:
+    config = (await live.get("/api/v1/config")).json()
+    assert config["capabilities"]["age_confirmation"] is True
 
 
 async def test_analyze_timeout(make_client: Callable[..., Any], source: str) -> None:

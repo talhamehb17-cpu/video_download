@@ -222,11 +222,12 @@ def _reusable(info: dict[str, Any]) -> dict[str, Any]:
 # Some readers answer a platform's age question on their own, before anybody is asked:
 # the Reddit reader sends Reddit's "I am over 18" cookie with every request, the
 # Dailymotion reader switches the family filter off, others send a cookie, fill in the
-# site's age form or make up a birthday. An 18+ label from one of them therefore means
-# that the platform asks first, and that question is not Lumora's to answer for a visitor.
+# site's age form or make up a birthday. An 18+ label from one of them means that the
+# platform asked for an age first: the video is offered to a visitor who says they are
+# 18 or older, and to nobody else.
 #
 # A reader of this package that is switched off (``_WORKING = False``) is left out: yt-dlp
-# does not use it, so it never brings a video in that would need declining.
+# does not use it, so it never brings a video in that would be offered at all.
 #
 # Keyed by the reader, with the domains of its pages where another reader can finish
 # the job: a Reddit post that embeds a video from elsewhere keeps the address of the
@@ -260,45 +261,87 @@ def _reader_answered_an_age_question(info: dict[str, Any]) -> bool:
     return False
 
 
-def enforce_content_policy(info: dict[str, Any], limits: dict[str, Any], *, age_check: bool = False) -> None:
-    """Refuse anything that isn't a plain, public, on-demand video.
+def _adult_label(info: dict[str, Any]) -> bool:
+    age_limit = info.get("age_limit")
+    return isinstance(age_limit, (int, float)) and not isinstance(age_limit, bool) and age_limit >= 18
 
-    About age, the platform decides. ``age_limit`` is a label, and many platforms put
-    "18+" on videos they give to everybody (sensitive, mature, explicit): the label
-    alone declines nothing. What declines a video is the platform asking for a
-    sign-in or an age confirmation. That shows in three ways:
+
+def _age_reason(info: dict[str, Any], *, age_check: bool = False) -> str | None:
+    """Why this video is for adults only, or ``None`` when it is not.
+
+    ``age_limit`` alone is no reason: many platforms label videos 18+ that they give to
+    everybody (sensitive, mature, explicit). The video is for adults when the platform
+    asked for an age, which shows in three ways:
 
     * ``availability`` says an account is needed and the video carries the label;
     * the reader's log says so (``age_check``): it met the platform's age check and
       went on to read the video through another player;
     * the reader is one that answers the platform's age question by itself, and the
       video carries the label (``AGE_QUESTION_ANSWERED_BY_READER``).
+    """
+    if info.get("availability") == "needs_auth" and _adult_label(info):
+        return "the platform asks for a sign-in to confirm an age"
+    if age_check:
+        return "the reader reported the platform's age check"
+    if _adult_label(info) and _reader_answered_an_age_question(info):
+        return "the platform asks for an age confirmation"
+    return None
 
-    In all three cases the reader may well have got the video. It is not handed out.
+
+def adult_video(info: dict[str, Any], limits: dict[str, Any], *, age_check: bool = False) -> str | None:
+    """Whether the visitor has to confirm an age for this video, and whether that is offered.
+
+    Returns ``None`` when the video is for everybody, ``"confirm"`` when the visitor is
+    asked, and ``"blocked"`` when this service does not offer such videos
+    (``BLOCK_AGE_RESTRICTED`` or ``AGE_CONFIRMATION=false``).
+    """
+    reason = _age_reason(info, age_check=age_check)
+    if limits.get("block_age_restricted", False) and (reason or _adult_label(info)):
+        return "blocked"  # the operator's own rule: every 18+ label declines
+    if not limits.get("age_confirmation", True) and reason:
+        return "blocked"
+    return "confirm" if reason else None
+
+
+def enforce_content_policy(
+    info: dict[str, Any], limits: dict[str, Any], *, age_check: bool = False, age_confirmed: bool = False
+) -> None:
+    """Refuse anything that isn't a plain, public, on-demand video.
+
+    About age, the visitor decides, once: a video that is for adults only (see
+    :func:`_age_reason`) is offered after the visitor confirms that they are 18 or
+    older, and refused otherwise. Nothing about the platform's answer changes: Lumora
+    never signs in, and the reader carries no cookie from an account.
     """
     if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
         raise TaskError("live_stream", f"live_status={info.get('live_status')}")
 
-    age_limit = info.get("age_limit")
-    adult_label = isinstance(age_limit, (int, float)) and not isinstance(age_limit, bool) and age_limit >= 18
-
     availability = info.get("availability")
     if availability in _AVAILABILITY_ERRORS:
         code = _AVAILABILITY_ERRORS[availability]
-        if code == "login_required" and (adult_label or age_check):
-            code = "age_restricted"  # the sign-in the platform asks for is its age check
-        raise TaskError(code, f"availability={availability} age_limit={age_limit}")
-    if age_check:
-        raise TaskError("age_restricted", "the reader reported the platform's age check")
-    if adult_label and _reader_answered_an_age_question(info):
-        raise TaskError(
-            "age_restricted",
-            f"age_limit={age_limit} reader={info.get('extractor_key')}: the platform asks for an age confirmation",
-        )
+        adult = _age_reason(info, age_check=age_check)
+        if code == "login_required" and adult:
+            # The sign-in the platform asks for is its age check. Only a confirmed
+            # visitor gets this far; everyone else is stopped before the reader runs.
+            if limits.get("block_age_restricted", False) or not limits.get("age_confirmation", True):
+                # This service does not offer videos that need an age, and a header
+                # cannot overrule that.
+                raise TaskError("age_rating_blocked", f"availability={availability} {adult}")
+            if not age_confirmed:
+                raise TaskError("age_confirmation_required", f"availability={availability} {adult}")
+        else:
+            raise TaskError(code, f"availability={availability} age_limit={info.get('age_limit')}")
 
-    # The operator's stricter rule, off by default: decline on the label itself.
-    if limits.get("block_age_restricted", False) and adult_label:
-        raise TaskError("age_rating_blocked", f"age_limit={age_limit}")
+    adult = _age_reason(info, age_check=age_check)
+    if limits.get("block_age_restricted", False) and (adult or _adult_label(info)):
+        # The operator's stricter rule: the label itself declines. A confirmation in the
+        # request cannot overrule it.
+        raise TaskError("age_rating_blocked", f"{adult or 'an 18+ label'}; this service does not offer such videos")
+    if adult is not None:
+        if not limits.get("age_confirmation", True):
+            raise TaskError("age_rating_blocked", f"{adult}; this service does not offer such videos")
+        if not age_confirmed:
+            raise TaskError("age_confirmation_required", adult)
 
     duration = info.get("duration")
     max_duration = limits.get("max_duration_seconds")
@@ -382,13 +425,19 @@ def analyze(task: dict[str, Any], emit: Emit, log: _Log) -> dict[str, Any]:
         # Keep what the source offers, not what yt-dlp happened to pick by default:
         # a later download must select from ``formats`` afresh (see ``_reusable``).
         info = _reusable(ydl.sanitize_info(info, remove_private_keys=True))
-        enforce_content_policy(info, task.get("limits") or {}, age_check=log.age_check)
+        limits = task.get("limits") or {}
+        adult = adult_video(info, limits, age_check=log.age_check)
+        if adult == "blocked":
+            raise TaskError("age_rating_blocked", "this service does not offer videos that are for adults only")
+        enforce_content_policy(
+            info, limits, age_check=log.age_check, age_confirmed=adult == "confirm"
+        )
         thumbnail = fetch_thumbnail(ydl, info, work_dir, log)
 
     if info.get("extractor_key") == "HTML5MediaEmbed" and isinstance(info.get("title"), str):
         info["title"] = re.sub(r" \(1\)$", "", info["title"])  # numbering added for single embeds
     (work_dir / "info.json").write_text(json.dumps(info), encoding="utf-8")
-    return {"notices": notices, "thumbnail": thumbnail}
+    return {"notices": notices, "thumbnail": thumbnail, "age_restricted": adult == "confirm"}
 
 
 # ---------------------------------------------------------------------------- download
@@ -744,7 +793,12 @@ def _try_link(task: dict[str, Any], url: str) -> dict[str, Any]:
                     raise TaskError("unsupported_source", "no playable entry in playlist")
                 info = entries[0]
             info = ydl.sanitize_info(info, remove_private_keys=True)
-            enforce_content_policy(info, task.get("limits") or {}, age_check=log.age_check)
+            # A video that only a confirmed visitor would get still proves that this
+            # server can read the platform, which is what a check is for.
+            limits = dict(task.get("limits") or {})
+            limits["block_age_restricted"] = False
+            age_restricted = bool(_age_reason(info, age_check=log.age_check))
+            enforce_content_policy(info, limits, age_check=log.age_check, age_confirmed=age_restricted)
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:
@@ -756,7 +810,7 @@ def _try_link(task: dict[str, Any], url: str) -> dict[str, Any]:
     subtitles = info.get("subtitles")
     title = info.get("title")
     return {
-        "url": url, "ok": True,
+        "url": url, "ok": True, "age_restricted": age_restricted,
         "extractor": str(info.get("extractor_key") or "Generic"),
         "title": title[:200] if isinstance(title, str) else None,
         "streams": len(streams),

@@ -44,6 +44,10 @@ function entries(config: ServiceConfig | null): Entry[] {
           A link works only if the video is public and can be watched without signing in. Large platforms sometimes turn servers
           away; Lumora then says so plainly and never signs in or works around it. Services protected with DRM are never possible.
         </p>
+        <p>
+          Videos for adults only are offered too: the platform’s age question is put to you once, here in your browser, and your
+          answer lets Lumora read the video.
+        </p>
       </>
     )
   } else if (sources) {
@@ -64,6 +68,22 @@ function entries(config: ServiceConfig | null): Entry[] {
 
   return [
     { question: 'Which platforms work?', answer: sourceAnswer },
+    {
+      question: 'Can I download a video that is marked 18+?',
+      answer: (
+        <>
+          <p>
+            Yes, once you confirm that you are 18 or older. The question appears in place of the video, only for videos the platform
+            keeps behind an age check, and only you answer it: a no declines the link, and nothing else is ever assumed about your age.
+          </p>
+          <p>
+            Your answer is kept in this browser for six hours, never on the server, and it is sent with each request for that video.
+            With it, Lumora reads the video the way a visitor with a confirmed age would. It still never signs in to an account, and a
+            link copied out of the page carries no answer, so it is refused.
+          </p>
+        </>
+      ),
+    },
     {
       question: 'Are subtitles always available?',
       answer: (
@@ -101,7 +121,8 @@ function entries(config: ServiceConfig | null): Entry[] {
         <>
           <p>The message under the field says exactly what happened. The usual reasons are:</p>
           <ul className="list-disc space-y-1.5 pl-5">
-            <li>The video is private, needs a sign-in, or is behind a paywall or age check.</li>
+            <li>The video is private, needs a sign-in, or is behind a paywall.</li>
+            <li>The video is for adults only and you (or an earlier visitor in this browser) did not confirm being 18 or older.</li>
             <li>It is region-locked, DRM-protected, or a live stream that hasn’t finished.</li>
             <li>The page has no video, the link is mistyped, or the platform isn’t on this service’s list.</li>
             <li>The platform turned the server away, asking it to sign in or prove it is not a robot. Large platforms do this often.</li>

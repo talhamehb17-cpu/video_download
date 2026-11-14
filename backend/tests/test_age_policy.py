@@ -1,9 +1,14 @@
-"""Age labels and age checks: what is declined, what is not, and what the visitor is told.
+"""Age labels and age checks: who decides, what the visitor is asked, and what happens next.
 
-The rule: the platform decides. A video it gives to a visitor who is not signed in and
-has confirmed nothing is public, whatever rating its metadata carries. A video it only
-gives after a sign-in or an age confirmation is declined, with an explanation. That
-includes a video whose reader answered the platform's age question by itself.
+The platform decides, and the visitor answers once. A video that a platform gives to
+everybody is public, whatever rating its metadata carries: it is processed without a
+question. A video that is for adults only — the platform asked for an age, or the reader
+answered that question by itself — is offered after the visitor confirms that they are 18
+or older, and refused otherwise. The reader may answer the platform's age question once the
+visitor has said yes, but Lumora itself never signs in and never invents an answer.
+
+The confirmation travels with the request (a field, or the ``X-Lumora-Age-Confirmed``
+header); its memory on the device is the website's business, not the API's.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import yt_dlp
 from yt_dlp.extractor import gen_extractor_classes
 from yt_dlp.extractor.common import InfoExtractor
 
+from app import schemas
 from app.config import Settings
 from app.errors import ERRORS
 from app.platforms.catalog import CATALOG
@@ -28,11 +34,16 @@ from app.worker.tasks import (
     AGE_QUESTION_ANSWERED_BY_READER,
     TaskError,
     _Log,
+    adult_video,
     enforce_content_policy,
 )
 
-PLATFORM_DECIDES: dict[str, Any] = {"block_age_restricted": False}
+# The default: an 18+ video is offered after the visitor confirms their age.
+CONFIRM: dict[str, Any] = {"block_age_restricted": False, "age_confirmation": True}
+# The operator refuses them (BLOCK_AGE_RESTRICTED=true, or AGE_CONFIRMATION=false).
 STRICT: dict[str, Any] = {"block_age_restricted": True}
+NO_QUESTION: dict[str, Any] = {"block_age_restricted": False, "age_confirmation": False}
+PLATFORM_DECIDES = CONFIRM
 
 
 def video(**fields: Any) -> dict[str, Any]:
@@ -55,6 +66,11 @@ def refusal(info: dict[str, Any], limits: dict[str, Any], **extra: Any) -> str |
     return None
 
 
+def offers(info: dict[str, Any], limits: dict[str, Any] = CONFIRM, **extra: Any) -> str | None:
+    """``None`` (no age involved), ``"confirm"`` (ask the visitor) or ``"blocked"``."""
+    return adult_video(info, limits, **extra)
+
+
 # ------------------------------------------------------------ a label alone is not a reason
 @pytest.mark.parametrize("age_limit", [None, 0, 6, 7, 12, 13, 15, 16, 17])
 @pytest.mark.parametrize("limits", [PLATFORM_DECIDES, STRICT, {}])
@@ -70,10 +86,21 @@ def test_an_adult_label_alone_does_not_decline_a_public_video(age_limit: int, av
     assert refusal(info, {}) is None, "a worker that is told nothing behaves like the default"
 
 
-def test_the_default_setting_lets_the_platform_decide(tmp_path: Path) -> None:
+def test_the_default_asks_the_visitor_instead_of_declining(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, storage_dir=tmp_path / "s", data_dir=tmp_path / "d")
     assert settings.block_age_restricted is False
-    assert worker_limits(settings)["block_age_restricted"] is False
+    assert settings.age_confirmation is True
+    assert settings.age_confirmation_ttl_seconds == 21_600
+    limits = worker_limits(settings)
+    assert limits["block_age_restricted"] is False and limits["age_confirmation"] is True
+
+
+def test_no_age_video_is_offered_without_the_visitors_confirmation(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "s", data_dir=tmp_path / "d")
+    for limits in (worker_limits(settings), CONFIRM, {}):
+        assert refusal(video(age_limit=18, availability="needs_auth"), limits) == "age_confirmation_required"
+        assert refusal(video(age_limit=18), limits, age_check=True) == "age_confirmation_required"
+        assert refusal(video(availability="needs_auth"), limits) == "login_required"
 
 
 # ------------------------------------------------------------ the operator's stricter rule
@@ -90,13 +117,88 @@ def test_the_strict_setting_is_read_from_the_environment(tmp_path: Path, monkeyp
     assert settings.block_age_restricted is True, "an explicit setting of an existing installation is honoured"
 
 
-# ------------------------------------------------------------ what the platform requires
-@pytest.mark.parametrize("limits", [PLATFORM_DECIDES, STRICT])
-def test_a_platform_age_check_is_declined_even_when_the_reader_got_the_video(limits: dict[str, Any]) -> None:
-    # YouTube marks an age-restricted video as "needs an account". The reader can sometimes
-    # read such a video through an embedded player; Lumora does not hand it out.
+# ------------------------------------------------------------ the visitor confirms the age
+@pytest.mark.parametrize("limits", [CONFIRM, {}])
+def test_a_confirmed_visitor_gets_a_video_the_platform_gated_by_age(limits: dict[str, Any]) -> None:
+    # YouTube marks an age-restricted video as "needs an account": the sign-in it asks for
+    # is its age check. A visitor who said they are 18 or older gets the video.
     gated = video(age_limit=18, availability="needs_auth")
-    assert refusal(gated, limits) == "age_restricted"
+    assert offers(gated, limits) == "confirm"
+    assert refusal(gated, limits, age_confirmed=True) is None
+
+
+def test_a_sign_in_that_is_not_about_age_is_still_a_sign_in() -> None:
+    # No label and no age notice: the platform wants an account, and a confirmation of
+    # being 18 changes nothing about that.
+    assert refusal(video(availability="needs_auth"), CONFIRM) == "login_required"
+    assert refusal(video(availability="needs_auth"), CONFIRM, age_confirmed=True) == "login_required"
+    assert refusal(video(age_limit=18, availability="private"), CONFIRM) == "private_content"
+    assert refusal(video(age_limit=18, availability="subscriber_only"), CONFIRM) == "paywalled"
+
+
+@pytest.mark.parametrize("limits", [STRICT, {"block_age_restricted": True, "age_confirmation": True}])
+def test_the_old_rule_declines_every_adult_label(limits: dict[str, Any]) -> None:
+    # BLOCK_AGE_RESTRICTED=true: the operator wants nothing that carries the label, not
+    # even a video that needs no age answer. A header cannot overrule it.
+    for info in (video(age_limit=18, availability="needs_auth"), video(age_limit=18), video(availability="needs_auth")):
+        gated = info.get("age_limit") is None  # an ordinary video that met the platform's age check
+        assert offers(info, limits, age_check=gated) == "blocked"
+        assert refusal(info, limits, age_check=gated) == "age_rating_blocked"
+        assert refusal(info, limits, age_check=gated, age_confirmed=True) == "age_rating_blocked"
+    assert offers(video(), limits) is None and refusal(video(), limits) is None, "a video for everybody is untouched"
+
+
+def test_a_service_without_age_videos_offers_none_of_them() -> None:
+    # AGE_CONFIRMATION=false: the question is not asked, and what is only for adults is
+    # not offered. A label on a video that everybody gets changes nothing.
+    assert offers(video(age_limit=18, availability="needs_auth"), NO_QUESTION) == "blocked"
+    assert offers(video(), NO_QUESTION, age_check=True) == "blocked"
+    assert refusal(video(age_limit=18, availability="needs_auth"), NO_QUESTION) == "age_rating_blocked"
+    assert refusal(video(), NO_QUESTION, age_check=True, age_confirmed=True) == "age_rating_blocked"
+    assert offers(video(age_limit=18), NO_QUESTION) is None
+
+
+def test_the_worker_asks_only_for_a_video_the_platform_gated() -> None:
+    """``adult_video`` is what the worker calls before the reader runs: ask, don't ask, or refuse."""
+    assert adult_video(video(age_limit=18, availability="needs_auth"), CONFIRM) == "confirm"
+    assert adult_video(video(age_limit=18), CONFIRM) is None, "a label on a video for everybody: no question"
+    assert adult_video(video(age_limit=18, availability="needs_auth"), STRICT) == "blocked"
+    assert adult_video(video(), CONFIRM, age_check=True) == "confirm"
+
+
+def test_a_label_from_a_reader_that_answers_still_needs_the_visitor() -> None:
+    for reader in ("Reddit", "Dailymotion", "CDA", "PornHub", "VideoPress", "YouPorn", "Murrtube"):
+        info = video(extractor_key=reader, age_limit=18)
+        assert offers(info) == "confirm", reader
+        assert refusal(info, CONFIRM) == "age_confirmation_required", reader
+        assert refusal(info, CONFIRM, age_confirmed=True) is None, reader
+
+
+def test_the_message_says_the_visitor_may_confirm_and_that_lumora_does_not() -> None:
+    spec = ERRORS["age_confirmation_required"]
+    assert spec.status == 403, "it can be retried with the confirmation, so it is not a 422"
+    assert "18 or older" in (spec.hint or "")
+    assert "never signs in" in (spec.hint or "")
+    # The old rule ("Lumora never answers the platform's age question") is gone: what the
+    # reader does after a yes is exactly that, so the hint must not claim otherwise.
+    assert "does not answer" not in (spec.hint or "").lower()
+    blocked = ERRORS["age_rating_blocked"]
+    assert blocked.status == 422 and "18+" in blocked.message and "not set up" in (blocked.hint or "")
+    for code in ("age_confirmation_required", "age_rating_blocked"):
+        text = f"{ERRORS[code].message} {ERRORS[code].hint}"
+        assert "bypass" not in text.lower() and "http" not in text.lower()
+
+
+def test_the_account_field_counts_as_the_confirmation() -> None:
+    # The request model accepts the confirmation as a field; the header is the other way.
+    assert schemas.AnalyzeRequest(url="https://example.com/v").age_confirmed is False
+    assert schemas.AnalyzeRequest(url="https://example.com/v", age_confirmed=True).age_confirmed is True
+    assert schemas.JobCreateRequest(analysis_id="a" * 16, quality_id="q1").age_confirmed is False
+    assert schemas.AGE_CONFIRMATION_HEADER == "X-Lumora-Age-Confirmed"
+    from app.api.routes import _age_confirmed
+    assert _age_confirmed("true") is True and _age_confirmed("1") is True
+    for other in (None, "", "false", "0", "yes", "TRUE-ish"):
+        assert _age_confirmed(other) is False, other
 
 
 def test_a_sign_in_wall_without_an_age_label_stays_a_sign_in_wall() -> None:
@@ -106,7 +208,7 @@ def test_a_sign_in_wall_without_an_age_label_stays_a_sign_in_wall() -> None:
     assert refusal(video(age_limit=18, availability="subscriber_only"), PLATFORM_DECIDES) == "paywalled"
 
 
-def test_the_readers_own_notice_of_an_age_check_declines_the_video() -> None:
+def test_the_readers_own_notice_of_an_age_check_asks_the_visitor() -> None:
     # The age markers can be missing from the metadata. The reader still says so when
     # the platform answered with its age check and another player was used instead.
     log = _Log()
@@ -115,8 +217,9 @@ def test_the_readers_own_notice_of_an_age_check_declines_the_video() -> None:
     log.debug("[youtube] dQw4w9WgXcQ: This video is age-restricted; some formats may be missing "
               "without authentication. Use --cookies-from-browser or --cookies for the authentication.")
     assert log.age_check is True
-    assert refusal(video(age_limit=0), PLATFORM_DECIDES, age_check=log.age_check) == "age_restricted"
-    assert refusal(video(), PLATFORM_DECIDES, age_check=False) is None
+    assert refusal(video(), CONFIRM, age_check=log.age_check) == "age_confirmation_required"
+    assert refusal(video(), CONFIRM, age_check=log.age_check, age_confirmed=True) is None
+    assert refusal(video(), CONFIRM, age_check=False) is None
 
 
 @pytest.mark.parametrize("line", [
@@ -142,10 +245,11 @@ def test_the_notice_still_exists_in_the_installed_reader() -> None:
     assert re.search(r"needs_auth=info\['age_limit'\] >= 18", source)
 
 
-# ------------------------------------------------------------ an age question is never answered
+# ---------------------------------------------------- the readers that answer an age question
 # Reddit asks "are you over 18?" before it shows a post that it marks 18+, and Dailymotion
-# keeps explicit videos behind its family filter. The readers answer both by themselves
-# (a cookie). Lumora does not pass that answer on: the video is declined.
+# keeps explicit videos behind its family filter. Their readers answer both by themselves
+# (a cookie), which makes the video one for adults only: the visitor is asked before
+# Lumora reads it, and its parts are only handed out to the visitor who said yes.
 @pytest.mark.parametrize("info", [
     video(extractor_key="Reddit", age_limit=18, webpage_url="https://www.reddit.com/r/videos/comments/abc/a_clip/"),
     video(extractor_key="Reddit", age_limit=18, webpage_url="https://old.reddit.com/r/videos/comments/abc/"),
@@ -166,8 +270,12 @@ def test_the_notice_still_exists_in_the_installed_reader() -> None:
 ], ids=["reddit", "old-reddit", "reddit-no-address", "dailymotion", "dai.ly", "reddit-embed", "redd.it-embed",
         "cda", "videopress", "pornhub", "youporn", "murrtube"])
 @pytest.mark.parametrize("limits", [PLATFORM_DECIDES, STRICT, {}])
-def test_a_video_behind_an_age_question_is_declined(info: dict[str, Any], limits: dict[str, Any]) -> None:
-    assert refusal(info, limits) == "age_restricted"
+def test_a_video_behind_an_age_question_is_for_adults_only(info: dict[str, Any], limits: dict[str, Any]) -> None:
+    assert refusal(info, limits) == ("age_rating_blocked" if limits == STRICT else "age_confirmation_required")
+    assert refusal(info, CONFIRM, age_confirmed=True) is None, "a confirmed visitor gets it"
+    assert refusal(info, STRICT, age_confirmed=True) == "age_rating_blocked", "unless the operator refuses adult videos"
+    assert refusal(info, NO_QUESTION, age_confirmed=True) == "age_rating_blocked", \
+        "nor when the service does not offer them"
 
 
 @pytest.mark.parametrize("info", [
@@ -287,11 +395,12 @@ def test_a_post_that_hands_its_video_to_another_reader_keeps_its_address_and_lab
 
     assert info["extractor_key"] == "HTML5MediaEmbed", "the other reader finished the job"
     assert info["webpage_url"] == f"{source}/post/abc" and info["age_limit"] == 18
-    assert refusal(info, PLATFORM_DECIDES) is None, "an ordinary website: the label alone declines nothing"
+    assert refusal(info, CONFIRM) is None, "an ordinary website: the label alone declines nothing"
 
     monkeypatch.setitem(tasks.AGE_QUESTION_ANSWERED_BY_READER, "Reddit", ("reddit.com", "redd.it", "127.0.0.1"))
-    assert refusal(info, PLATFORM_DECIDES) == "age_restricted", "the address of the post decides"
-    assert refusal({**info, "age_limit": 0}, PLATFORM_DECIDES) is None
+    assert refusal(info, CONFIRM) == "age_confirmation_required", "the address of the post decides"
+    assert refusal(info, CONFIRM, age_confirmed=True) is None
+    assert refusal({**info, "age_limit": 0}, CONFIRM) is None
 
 
 def test_a_refusal_through_another_reader_is_still_explained_as_an_age_check() -> None:
@@ -299,21 +408,12 @@ def test_a_refusal_through_another_reader_is_still_explained_as_an_age_check() -
     # label (0) replaces YouTube's, the reader's notice and "needs an account" remain.
     info = video(extractor_key="Youtube", age_limit=0, availability="needs_auth",
                  webpage_url="https://www.reddit.com/r/videos/comments/abc/")
-    assert refusal(info, PLATFORM_DECIDES, age_check=True) == "age_restricted"
-    assert refusal(info, PLATFORM_DECIDES, age_check=False) == "login_required"
+    assert refusal(info, CONFIRM, age_check=True) == "age_confirmation_required"
+    assert refusal(info, CONFIRM, age_check=True, age_confirmed=True) is None
+    assert refusal(info, CONFIRM, age_check=False) == "login_required"
 
 
 # ------------------------------------------------------------ what the visitor is told
-def test_the_explanation_names_the_reason_and_what_lumora_does_not_do() -> None:
-    spec = ERRORS["age_restricted"]
-    assert spec.status == 422
-    assert "sign-in or age check" in spec.message
-    assert "never signs in" in (spec.hint or "") and "never confirms an age" in (spec.hint or "")
-    for code in ("age_restricted", "age_rating_blocked"):
-        text = f"{ERRORS[code].message} {ERRORS[code].hint}"
-        assert "bypass" not in text.lower() and "http" not in text.lower()
-
-
 @pytest.mark.parametrize("message", [
     "[youtube] x: Sign in to confirm your age. This video may be inappropriate for some users.",
     "[youtube] x: Sign in to confirm your age. Use --cookies-from-browser or --cookies for the authentication.",

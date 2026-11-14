@@ -88,6 +88,9 @@ class Job:
     embedded_subtitles: list[str] = field(default_factory=list)
     notices: list[str] = field(default_factory=list)
     downloads: int = 0
+    # An 18+ video: its progress, file name and file are only shown to a visitor who
+    # confirmed their age, and its name says so in the download list.
+    age_restricted: bool = False
     task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     @property
@@ -193,6 +196,7 @@ class JobManager:
             directory=directory,
             created_at=time.time(),
             reserved_bytes=needed,
+            age_restricted=analysis.age_restricted,
         )
         self._jobs[job_id] = job
         job.task = asyncio.create_task(self._run(job), name=f"job-{job_id[:6]}")

@@ -5,6 +5,7 @@
  * app calls relative `/api/...` paths, which the dev server proxies to a local API.
  */
 
+import { ageHeaders, withAge } from './ageConsent'
 import { platformsFromDomains, type PlatformList } from './platforms'
 
 export const API_BASE: string = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
@@ -66,6 +67,8 @@ export interface Analysis {
   subtitles: SubtitleTrack[]
   notices: Notice[]
   expires_in: number
+  /** The video is for adults only; every request for it carries the visitor's answer. */
+  age_restricted?: boolean
 }
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired' | 'deleted'
@@ -121,6 +124,8 @@ export interface ServiceConfig {
     subtitle_formats: string[]
     /** The API has the platform list and the admin panel (version 1.1 and later). */
     platform_list?: boolean
+    /** The API offers 18+ videos after the visitor confirms their age (version 1.2 and later). */
+    age_confirmation?: boolean
   }
   sources: {
     mode: 'platforms' | 'open' | 'allowlist'
@@ -260,24 +265,54 @@ export const api = {
     return json<PlatformList>('/api/v1/platforms', { signal })
   },
 
-  analyze(url: string, signal?: AbortSignal): Promise<Analysis> {
-    return json<Analysis>('/api/v1/analyze', { method: 'POST', body: JSON.stringify({ url }), signal })
-  },
-
-  createJob(analysisId: string, qualityId: string, embedSubtitles: string[]): Promise<Job> {
-    return json<Job>('/api/v1/jobs', {
+  /**
+   * Read a link. `ageConfirmed` is the visitor's own answer, sent with the request: the
+   * API keeps no record of who confirmed anything, so every request carries it.
+   */
+  analyze(url: string, options: { ageConfirmed?: boolean; signal?: AbortSignal } = {}): Promise<Analysis> {
+    const { ageConfirmed = false, signal } = options
+    return json<Analysis>('/api/v1/analyze', {
       method: 'POST',
-      body: JSON.stringify({ analysis_id: analysisId, quality_id: qualityId, embed_subtitles: embedSubtitles }),
+      body: JSON.stringify(withAge({ url }, ageConfirmed)),
+      headers: ageHeaders(ageConfirmed),
+      signal,
     })
   },
 
-  job(id: string, signal?: AbortSignal): Promise<Job> {
-    return json<Job>(`/api/v1/jobs/${encodeURIComponent(id)}`, { signal })
+  createJob(analysisId: string, qualityId: string, embedSubtitles: string[], ageConfirmed = false): Promise<Job> {
+    return json<Job>('/api/v1/jobs', {
+      method: 'POST',
+      body: JSON.stringify(withAge(
+        { analysis_id: analysisId, quality_id: qualityId, embed_subtitles: embedSubtitles },
+        ageConfirmed,
+      )),
+      headers: ageHeaders(ageConfirmed),
+    })
+  },
+
+  job(id: string, options: { ageConfirmed?: boolean; signal?: AbortSignal } = {}): Promise<Job> {
+    const { ageConfirmed = false, signal } = options
+    return json<Job>(`/api/v1/jobs/${encodeURIComponent(id)}`, { signal, headers: ageHeaders(ageConfirmed) })
   },
 
   /** Cancels a running job, or deletes a finished file immediately. */
-  cancelJob(id: string): Promise<Job> {
-    return json<Job>(`/api/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  cancelJob(id: string, ageConfirmed = false): Promise<Job> {
+    return json<Job>(`/api/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE', headers: ageHeaders(ageConfirmed) })
+  },
+
+  /** The preview image. Fetched in the page, because an `<img>` cannot carry the visitor's answer. */
+  async thumbnail(analysisId: string, ageConfirmed = false): Promise<Blob> {
+    const path = `/api/v1/analyses/${encodeURIComponent(analysisId)}/thumbnail`
+    const response = await send(path, { headers: { Accept: 'image/*', ...ageHeaders(ageConfirmed) } })
+    if (!response.ok) throw await failure(response)
+    return response.blob()
+  },
+
+  /** A finished file, fetched with the visitor's answer so a 403 can be shown in the page. */
+  async file(url: string, ageConfirmed = false): Promise<{ blob: Blob; filename: string | null }> {
+    const response = await send(url, { headers: { Accept: '*/*', ...ageHeaders(ageConfirmed) } })
+    if (!response.ok) throw await failure(response)
+    return { blob: await response.blob(), filename: filenameFromDisposition(response.headers.get('content-disposition')) }
   },
 
   /** Subtitle files are small, so they are fetched here to surface errors in the page. */

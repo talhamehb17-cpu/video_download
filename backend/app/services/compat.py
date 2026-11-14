@@ -80,6 +80,9 @@ def interpret(
             "method": "extractor" if dedicated else "generic",
             "extractor": str(success.get("extractor")) if dedicated else None,
         }
+        # A video that only a visitor who confirmed their age would get proves just as
+        # much: the server can read this website.
+        needs_age = bool(success.get("age_restricted"))
         if not dedicated and catalogued:
             return CheckResult(status="partial", summary=(
                 "A generic reader found a public video on the page without signing in. "
@@ -93,6 +96,10 @@ def interpret(
         if not success.get("video"):
             return CheckResult(status="partial", summary="The integration works, but only audio was offered.", **base)
         height = f" up to {success['max_height']}p" if success.get("max_height") else ""
+        if needs_age:
+            return CheckResult(status="supported", summary=(
+                f"A video for adults only was read{height}; visitors confirm their age before they get it."
+            ), **base)
         return CheckResult(status="supported", summary=f"A public video was read{height} without signing in.", **base)
 
     if not attempts:

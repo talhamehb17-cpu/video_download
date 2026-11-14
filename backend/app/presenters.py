@@ -97,6 +97,7 @@ def analysis_response(analysis: Analysis, platforms: PlatformRegistry | None = N
         ],
         notices=notices(analysis.notices),
         expires_in=max(0, int(analysis.expires_at - time.time())),
+        age_restricted=analysis.age_restricted,
     )
 
 
@@ -160,6 +161,7 @@ def config_response(services: Services) -> schemas.ConfigResponse:
             subtitle_conversion=ffmpeg,
             subtitle_embedding=ffmpeg,
             subtitle_formats=["srt", "vtt"],
+            age_confirmation=settings.age_confirmation and not settings.block_age_restricted,
         ),
         sources=schemas.SourcePolicyInfo(mode=settings.source_policy, domains=domains, examples=examples(services)),
     )

@@ -138,13 +138,17 @@ class Settings(BaseSettings):
     source_policy: Literal["platforms", "open", "allowlist"] = "platforms"
     allowed_domains: CsvList = Field(default_factory=lambda: list(DEFAULT_ALLOWED_DOMAINS))
     blocked_domains: CsvList = Field(default_factory=list)
-    # A video that a platform only shows after a sign-in or age check is always
-    # declined: Lumora never signs in. This setting is about something else, the
-    # 18+ label that many platforms put on videos they show to everybody
-    # ("sensitive", "mature", "explicit").
-    # False (default): such a label alone is no reason to decline.
-    # True: decline every video that carries an 18+ label.
+    # A video that carries an 18+ label, or that a platform only shows after its
+    # age question, is offered once the visitor confirms that they are 18 or older.
+    # True (default): that confirmation is accepted. Lumora never signs in and never
+    # confirms an age on its own; the visitor does.
+    # False: decline every video that carries an 18+ label, as before version 1.2.
     block_age_restricted: bool = False
+    # False (default): an 18+ video is only offered after the visitor confirms their
+    # age. True: such videos are never offered (the confirmation is not shown).
+    age_confirmation: bool = True
+    # How long an accepted confirmation counts for one visitor, in seconds.
+    age_confirmation_ttl_seconds: int = Field(default=21_600, ge=60, le=2_592_000)
     allowed_ports: Annotated[list[int], NoDecode] = Field(default_factory=lambda: [80, 443])
     # Exact host:port pairs exempt from the public-network rule. For automated tests
     # and local demos only; refused when ENVIRONMENT=production.

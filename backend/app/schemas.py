@@ -8,6 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 ID_PATTERN = r"^[A-Za-z0-9_-]{16,64}$"
 
+# The header in which a visitor states that they are 18 or older. Its only values are
+# "true" (and "1"), the same ones the browser's form sends; anything else means the
+# visitor has not confirmed.
+AGE_CONFIRMATION_HEADER = "X-Lumora-Age-Confirmed"
+
 
 class RequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -15,10 +20,15 @@ class RequestModel(BaseModel):
 
 class AnalyzeRequest(RequestModel):
     url: str = Field(min_length=1, max_length=2048, description="Public page or media URL (http/https).")
+    # The visitor says they are 18 or older, after being asked. Without it, a video that
+    # is for adults only is not analyzed. A client that shows the question must ask.
+    age_confirmed: bool = Field(default=False, description="The visitor confirms being 18 or older.")
 
 
 class JobCreateRequest(RequestModel):
     analysis_id: str = Field(pattern=ID_PATTERN)
+    # See AnalyzeRequest.age_confirmed: a download of an 18+ video needs it too.
+    age_confirmed: bool = Field(default=False, description="The visitor confirms being 18 or older.")
     quality_id: str = Field(pattern=r"^q[0-9]{1,3}$")
     embed_subtitles: list[Annotated[str, Field(pattern=r"^s[0-9]{1,4}$")]] = Field(
         default_factory=list, max_length=8, description="Subtitle track ids to embed into the file."
@@ -97,6 +107,8 @@ class AnalysisResponse(BaseModel):
     subtitles: list[SubtitleTrack]
     notices: list[Notice]
     expires_in: int
+    # True when the video is only for adults, and the visitor confirmed their age.
+    age_restricted: bool = False
 
 
 # ------------------------------------------------------------------------------- jobs
@@ -149,6 +161,10 @@ class Capabilities(BaseModel):
     subtitle_embedding: bool
     subtitle_formats: list[str]
     platform_list: bool = Field(default=True, description="GET /api/v1/platforms exists (API 1.1 and later).")
+    age_confirmation: bool = Field(
+        default=False,
+        description="An 18+ video is offered after the visitor confirms being 18 or older (API 1.2 and later).",
+    )
 
 
 class Example(BaseModel):

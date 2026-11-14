@@ -52,20 +52,22 @@ CATALOG: tuple[CatalogEntry, ...] = (
     # --- large international platforms ----------------------------------------------
     CatalogEntry(
         "youtube", "YouTube", ("youtube.com", "youtu.be", "youtube-nocookie.com"), "partial",
-        "Public videos, usually in fewer qualities than a browser gets. Age-restricted, members-only and "
-        "live videos are declined, and YouTube often asks servers to sign in.",
+        "Public videos, usually in fewer qualities than a browser gets. Members-only and live videos are "
+        "declined; age-restricted ones ask the visitor to confirm their age first. YouTube often asks servers "
+        "to sign in.",
     ),
     CatalogEntry("vimeo", "Vimeo", ("vimeo.com",), "partial",
                  "Public videos. Private, password-protected and some embed-only videos are declined."),
     CatalogEntry("dailymotion", "Dailymotion", ("dailymotion.com", "dai.ly"),
-                 note="Videos that Dailymotion marks as explicit are declined."),
+                 note="Videos that Dailymotion marks as explicit ask the visitor to confirm their age first."),
     CatalogEntry("facebook", "Facebook", ("facebook.com", "fb.watch"), "partial", _LOGIN),
     CatalogEntry("instagram", "Instagram", ("instagram.com", "instagr.am"), "partial", _LOGIN),
     CatalogEntry("tiktok", "TikTok", ("tiktok.com",), "partial",
                  "Public videos. Availability depends on the server's country, and TikTok often blocks servers."),
     CatalogEntry("x", "X (Twitter)", ("x.com", "twitter.com"), "partial", _LOGIN),
     CatalogEntry("reddit", "Reddit", ("reddit.com", "redd.it"), "partial",
-                 "Videos hosted by Reddit. Posts that Reddit marks 18+ are declined. Reddit often blocks servers."),
+                 "Videos hosted by Reddit. Posts that Reddit marks 18+ ask the visitor to confirm their age "
+                 "first. Reddit often blocks servers."),
     CatalogEntry("pinterest", "Pinterest", ("pinterest.*", "pin.it"), "partial", "Video pins only."),
     CatalogEntry("twitch", "Twitch", ("twitch.tv",), "partial",
                  "Clips and past broadcasts. Live streams and subscriber-only videos are declined."),
