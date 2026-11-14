@@ -667,7 +667,7 @@ storage. Each lives in one module (`services/jobs.py`, `services/storage.py`). V
 | "This video carries an 18+ label" | `BLOCK_AGE_RESTRICTED=true` is set on the API, so every label declines and nobody is asked. Remove the line and restart if you do not want that. |
 | The age question comes back on every link | The browser refuses to keep the answer (private mode, or cookies cleared). The visitor's word cannot be remembered there. |
 | Only five sources work after updating to 1.1 | `SOURCE_POLICY=allowlist` is still set on the API. Set `platforms` and restart. The admin panel shows a warning while this is the case. |
-| Admin page: "The API needs an update first" | The API is older than 1.1. Update it ([Deploying](#deploying)). |
+| Admin page: "The API needs an update first" | The API is older than 1.1 (the platform list and the panel arrived then). Update it ([Deploying](#deploying)); the current version is 1.2. |
 | Admin page: "The admin panel is switched off on the server" | `ADMIN_EMAIL` or `ADMIN_BOOTSTRAP_PASSWORD` is not set on the API. |
 | Admin: asked to choose a password again after every restart, or "Changes can't be saved to disk" | `DATA_DIR` does not survive restarts or is not writable for the service's user. |
 | Admin: "Too many failed sign-in attempts" | Five wrong passwords. Wait for the time shown. Restarting the API also clears the pause. |
