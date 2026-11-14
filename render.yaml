@@ -1,0 +1,64 @@
+# Render blueprint for the Lumora API (https://render.com/docs/blueprint-spec).
+#
+# In the Render dashboard choose New > Blueprint and pick this repository. Render
+# builds backend/Dockerfile and serves it at https://<service name>.onrender.com.
+# Put that address into the website's VITE_API_BASE_URL (see the README).
+#
+# Checked against Render's documentation, but not yet run on Render.
+services:
+  - type: web
+    name: lumora-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # free: 0.1 CPU and 512 MB. Stopped after 15 minutes without requests, about a
+    # minute to start again (the website waits). Render may suspend a free service
+    # that moves a lot of data, so use it to try things out. For regular use:
+    # 0.5c-512mb, 1c-2g, ... (https://render.com/docs/free)
+    plan: free
+    region: singapore   # or oregon, ohio, virginia, frankfurt. Cannot be changed later.
+    healthCheckPath: /health
+    autoDeployTrigger: commit   # redeploy on every push to the blueprint's branch
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+
+      # The website's address(es), comma-separated. Browsers refuse every other origin.
+      - key: ALLOWED_ORIGINS
+        value: https://lumora-video.vercel.app
+
+      # Render sits behind Cloudflare, which puts the visitor's address in this header.
+      # It is what the per-visitor rate limits use.
+      - key: CLIENT_IP_HEADER
+        value: CF-Connecting-IP
+
+      # Which sources are served. See "Platforms and source policy" in the README
+      # before changing this.
+      - key: SOURCE_POLICY
+        value: platforms
+
+      # Cautious limits for the free instance. Measured against the sample source,
+      # the API used about 55 MB and each download or analysis 55 to 80 MB; real
+      # sites can need more. Raise these on a larger instance.
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: MAX_CONCURRENT_LIGHT_TASKS
+        value: "2"
+      - key: MAX_QUEUED_JOBS
+        value: "5"
+      - key: MAX_FILE_SIZE_MB
+        value: "512"
+      - key: MIN_FREE_DISK_MB
+        value: "128"
+      - key: FILE_TTL_SECONDS
+        value: "900"
+
+      # The admin panel (see "Admin panel" in the README) is off until both of these
+      # are set. Add them in the Render dashboard, not here: this file is public.
+      # A free instance has no disk that survives a restart, so the account starts
+      # from the initial password again each time. A paid instance with a disk
+      # mounted at /srv/data keeps it.
+      #   ADMIN_EMAIL, ADMIN_BOOTSTRAP_PASSWORD
+
+      - key: ENABLE_DOCS
+        value: "false"

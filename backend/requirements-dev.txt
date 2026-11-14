@@ -1,0 +1,9 @@
+-r requirements.txt
+httpx==0.28.1
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
+ruff==0.17.4
+mypy==2.4.1
+# Bundles an FFmpeg binary, used only when no system FFmpeg is installed (handy on
+# a laptop or in CI). Production images install FFmpeg from the OS instead.
+imageio-ffmpeg==0.8.1

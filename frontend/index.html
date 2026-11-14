@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Lumora — Your Videos. Your Way.</title>
+    <meta
+      name="description"
+      content="Paste a public video link and download it in the quality you choose, with subtitles as SRT or WebVTT. No account needed; files are deleted automatically."
+    />
+    <meta name="theme-color" content="#05060f" />
+    <meta name="color-scheme" content="dark light" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Lumora — Your Videos. Your Way." />
+    <meta
+      property="og:description"
+      content="Download public videos in the quality you choose, with subtitles. No account needed."
+    />
+    <meta name="twitter:card" content="summary" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Applies the saved theme before first paint (external file: the CSP allows no inline scripts). -->
+    <script src="/theme-init.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p style="padding: 2rem; font-family: system-ui, sans-serif">Lumora needs JavaScript to run.</p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

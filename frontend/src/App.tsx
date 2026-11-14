@@ -1,0 +1,78 @@
+import { AnimatePresence, LazyMotion, MotionConfig, domAnimation, m } from 'framer-motion'
+import { Suspense, lazy, useCallback, useState } from 'react'
+
+import { Background } from './components/layout/Background'
+import { Footer } from './components/layout/Footer'
+import { Navbar } from './components/layout/Navbar'
+import { useServiceStatus } from './hooks/useServiceStatus'
+import { useTheme, type Theme } from './hooks/useTheme'
+import { usePath } from './lib/router'
+import { ADMIN_PATH } from './lib/site'
+import Home from './pages/Home'
+
+// The legal pages are rarely opened, so they load on demand.
+const Privacy = lazy(() => import('./pages/Legal').then((module) => ({ default: module.Privacy })))
+const Terms = lazy(() => import('./pages/Legal').then((module) => ({ default: module.Terms })))
+const NotFound = lazy(() => import('./pages/Legal').then((module) => ({ default: module.NotFound })))
+// The administrator's page: its code is fetched only when its address is opened.
+const Admin = lazy(() => import('./pages/Admin'))
+
+const PAGE_TRANSITION = { duration: 0.4, ease: [0.16, 1, 0.3, 1] as const }
+
+interface SiteProps {
+  path: string
+  theme: Theme
+  onToggleTheme: () => void
+}
+
+/** The public website: navigation, the page for the current address, footer. */
+function Site({ path, theme, onToggleTheme }: SiteProps) {
+  const { state: service, retry, refreshPlatforms } = useServiceStatus()
+  const [activeSection, setActiveSection] = useState<string | null>(null)
+  const onActiveSection = useCallback((id: string | null) => setActiveSection(id), [])
+  const config = service.status === 'online' ? service.config : null
+
+  let page
+  if (path === '/') page = <Home service={service} onRetryService={retry} refreshPlatforms={refreshPlatforms} onActiveSection={onActiveSection} />
+  else if (path === '/privacy') page = <Privacy config={config} />
+  else if (path === '/terms') page = <Terms />
+  else page = <NotFound />
+
+  return (
+    <>
+      <Navbar theme={theme} onToggleTheme={onToggleTheme} activeSection={path === '/' ? activeSection : null} />
+      <AnimatePresence mode="wait" initial={false}>
+        <m.div key={path} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={PAGE_TRANSITION}>
+          <Suspense fallback={<div className="min-h-dvh" />}>{page}</Suspense>
+          <Footer />
+        </m.div>
+      </AnimatePresence>
+    </>
+  )
+}
+
+export default function App() {
+  const path = usePath()
+  const { theme, toggle } = useTheme()
+
+  return (
+    <LazyMotion features={domAnimation} strict>
+      <MotionConfig reducedMotion="user">
+        <a
+          href="#main"
+          className="bg-brand fixed left-4 top-4 z-[60] -translate-y-24 rounded-full px-4 py-2 text-sm font-medium text-white transition-transform focus:translate-y-0"
+        >
+          Skip to content
+        </a>
+        <Background />
+        {path === ADMIN_PATH ? (
+          <Suspense fallback={<div className="min-h-dvh" />}>
+            <Admin theme={theme} onToggleTheme={toggle} />
+          </Suspense>
+        ) : (
+          <Site path={path} theme={theme} onToggleTheme={toggle} />
+        )}
+      </MotionConfig>
+    </LazyMotion>
+  )
+}
